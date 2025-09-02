@@ -12,6 +12,15 @@ header('Content-Type: application/json');
 
 use Bitrix\Main\Loader;
 use LeadSpace\Classes\Contacts\FindContact;
+use LeadSpace\Classes\Company\CompanyManager;
+
+// Загружаем необходимые модули
+if (!Loader::includeModule('crm')) {
+    die(json_encode([
+        'success' => false,
+        'error' => 'CRM module not loaded'
+    ]));
+}
 
 if (!Loader::includeModule('leadspace.integrationtarget')) {
     die(json_encode([
@@ -94,17 +103,88 @@ $apiFunctions = [
         }
     },
     
-    'createAddress' => function($params) {
+    'findOrCreateCompany' => function($params) {
         try {
+            $companyId = CompanyManager::findOrCreateCompany($params['properties'] ?? []);
+            
+            if ($companyId) {
+                return [
+                    'success' => true,
+                    'data' => [
+                        'companyId' => $companyId
+                    ]
+                ];
+            } else {
+                return [
+                    'success' => false,
+                    'error' => 'Не удалось найти или создать компанию'
+                ];
+            }
+        } catch (\Exception $e) {
+            error_log('Error in findOrCreateCompany: ' . $e->getMessage());
+            return [
+                'success' => false,
+                'error' => 'Внутренняя ошибка сервера'
+            ];
+        }
+    },
+    
+    'updateCompany' => function($params) {
+        try {
+            $companyId = $params['companyId'] ?? null;
+            $data = $params['data'] ?? [];
+            
+            if (!$companyId) {
+                return [
+                    'success' => false,
+                    'error' => 'Не указан ID компании'
+                ];
+            }
+            
+            $result = CompanyManager::updateCompanyFields($companyId, $data);
+            
+            if ($result) {
+                return [
+                    'success' => true,
+                    'data' => [
+                        'companyId' => $result
+                    ]
+                ];
+            } else {
+                return [
+                    'success' => false,
+                    'error' => 'Не удалось обновить компанию'
+                ];
+            }
+        } catch (\Exception $e) {
+            error_log('Error in updateCompany: ' . $e->getMessage());
+            return [
+                'success' => false,
+                'error' => 'Внутренняя ошибка сервера'
+            ];
+        }
+    },
+    
+    'createRequisites' => function($params) {
+        try {
+            $companyId = $params['companyId'] ?? null;
             $requisites = $params['requisites'] ?? [];
-            $result = FindContact::createAddress($requisites);
+            
+            if (!$companyId) {
+                return [
+                    'success' => false,
+                    'error' => 'Не указан ID компании'
+                ];
+            }
+            
+            $result = CompanyManager::createRequisites($companyId, $requisites);
             
             return [
                 'success' => true,
                 'data' => $result
             ];
         } catch (\Exception $e) {
-            error_log('Error in createAddress: ' . $e->getMessage());
+            error_log('Error in createRequisites: ' . $e->getMessage());
             return [
                 'success' => false,
                 'error' => 'Внутренняя ошибка сервера'
