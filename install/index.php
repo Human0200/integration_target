@@ -117,11 +117,27 @@ class leadspace_integrationtarget extends CModule
 
     public function InstallEvents()
     {
+        $eventManager = EventManager::getInstance();
+        $eventManager->registerEventHandler(
+            'crm',
+            'onEntityDetailsTabsInitialized',
+            $this->MODULE_ID,
+            'LeadSpace\Tabs\CustomTab',
+            'onEntityDetailsTabsInitialized'
+        );
         return true;
     }
 
     public function UnInstallEvents()
     {
+        $eventManager = EventManager::getInstance();
+        $eventManager->unRegisterEventHandler(
+            'crm',
+            'onEntityDetailsTabsInitialized',
+            $this->MODULE_ID,
+            'LeadSpace\Tabs\CustomTab',
+            'onEntityDetailsTabsInitialized'
+        );
         return true;
     }
 
