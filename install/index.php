@@ -90,6 +90,12 @@ class leadspace_integrationtarget extends CModule
             true,
             true
         );
+        CopyDirFiles(
+            __DIR__ . '/install/integrationwithtargetactivity',
+            $_SERVER['DOCUMENT_ROOT'] . '/bitrix/activities/custom',
+            true,
+            true
+        );
 
         return true;
     }
@@ -102,7 +108,10 @@ class leadspace_integrationtarget extends CModule
 
         DeleteDirFilesEx('/bitrix/admin/' . $moduleAdminDir);
 
-
+        $createActivityPath = $_SERVER['DOCUMENT_ROOT'] . '/bitrix/activities/custom/integrationwithtargetactivity';
+        if (is_dir($createActivityPath)) {
+            DeleteDirFilesEx('/bitrix/activities/custom/integrationwithtargetactivity');
+        }
         if (is_dir($_SERVER['DOCUMENT_ROOT'] . '/bitrix/admin/' . $moduleAdminDir)) {
             @rmdir($_SERVER['DOCUMENT_ROOT'] . '/bitrix/admin/' . $moduleAdminDir);
         }
