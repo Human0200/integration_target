@@ -22,5 +22,11 @@ $arActivityDescription = array(
             "Default" => ""
         ),
     ),
+    "RETURN" => array(
+        "UserId" => array(
+            "NAME" => "ID пользователя",
+            "TYPE" => "string",
+        ),
+    )
 );
 ?>

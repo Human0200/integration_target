@@ -22,6 +22,7 @@ if (!check_bitrix_sessid()) {
 
 use Bitrix\Main\Application;
 use Bitrix\Main\Loader;
+use Bitrix\Crm\CompanyTable;
 
 if (!Loader::includeModule('crm') || !Loader::includeModule('main')) {
     die('Необходимые модули не подключены');
@@ -63,42 +64,73 @@ $targetPassword = isset($userFields['UF_TARGET_PASSWORD']) ? $userFields['UF_TAR
 
 // Формируем URL для iframe
 $url = 'https://test.targetco.ru';
-$params = [];
 
-// Добавляем параметры сущности
-if ($entityType !== '' && $entityId > 0) {
-    $params['entityType'] = $entityType;
-    $params['entityId'] = $entityId;
-}
-
-// Добавляем пользоватательские поля
-if (!empty($targetLogin)) {
-    $params['login'] = $targetLogin;
-}
-if (!empty($targetPassword)) {
-    $params['password'] = $targetPassword;
-}
-
-// Добавляем ID пользователя
-$params['userId'] = $userId;
-
-// Формируем полный URL
-if (!empty($params)) {
-    $url .= '?' . http_build_query($params);
+// Специальная обработка для компаний
+if ($entityType === 'company' && $entityId > 0) {
+    // Получаем поле UF_CRM_1760515262922 компании
+    $company = CompanyTable::getList([
+        'filter' => ['=ID' => $entityId],
+        'select' => ['ID', 'UF_CRM_1760515262922']
+    ])->fetch();
+    
+    if ($company && !empty($company['UF_CRM_1760515262922'])) {
+        // Для компании используем специальный URL с user_id из поля компании
+        $url = 'https://test.targetco.ru/offers#user_id=' . $company['UF_CRM_1760515262922'];
+    } else {
+        // Если поле не заполнено, формируем обычный URL
+        $params = [];
+        $params['entityType'] = $entityType;
+        $params['entityId'] = $entityId;
+        
+        if (!empty($targetLogin)) {
+            $params['email'] = $targetLogin;
+        }
+        if (!empty($targetPassword)) {
+            $params['password'] = $targetPassword;
+        }
+        $params['userId'] = $userId;
+        
+        $url .= '?' . http_build_query($params);
+    }
+} else {
+    // Для остальных сущностей формируем обычный URL
+    $params = [];
+    
+    // Добавляем параметры сущности
+    if ($entityType !== '' && $entityId > 0) {
+        $params['entityType'] = $entityType;
+        $params['entityId'] = $entityId;
+    }
+    
+    // Добавляем пользовательские поля
+    if (!empty($targetLogin)) {
+        $params['email'] = $targetLogin;
+    }
+    if (!empty($targetPassword)) {
+        $params['password'] = $targetPassword;
+    }
+    
+    // Добавляем ID пользователя
+    $params['userId'] = $userId;
+    
+    // Формируем полный URL
+    if (!empty($params)) {
+        $url .= '?' . http_build_query($params);
+    }
 }
 
 // Выводим iframe с адаптивной высотой
 ?>
 <div style="width: 100%; height: 800px;">
-    <iframe 
-        src="<?= htmlspecialcharsbx($url) ?>" 
-        width="100%" 
-        height="100%" 
-        frameborder="0" 
+    <iframe
+        src="<?= htmlspecialcharsbx($url) ?>"
+        width="100%"
+        height="100%"
+        frameborder="0"
         style="border: none; display: block;"
         onload="this.style.height = (this.contentWindow.document.body.scrollHeight + 20) + 'px';">
     </iframe>
 </div>
 <script>
-    console.log('URL: ' + '<?= htmlspecialcharsbx($url) ?>');
+console.log('URL: ' + '<?= htmlspecialcharsbx($url) ?>');
 </script>
