@@ -188,6 +188,47 @@ class FindContact
         // TODO: Реализовать создание адреса
         return ['success' => true, 'message' => 'Address creation not implemented yet'];
     }
+    
+    /**
+     * Удаляет контакт по ID
+     * @param int $contactId ID контакта для удаления
+     * @return bool true если удаление успешно, false в противном случае
+     */
+    public static function deleteContact($contactId)
+    {
+        if (empty($contactId)) {
+            error_log('DeleteContact: Contact ID is empty');
+            return false;
+        }
+        
+        try {
+            // Проверяем существование контакта
+            $contactResult = ContactTable::getByPrimary($contactId, [
+                'select' => ['ID']
+            ]);
+            
+            if (!$contactResult->fetch()) {
+                error_log("DeleteContact: Contact with ID {$contactId} not found");
+                return false;
+            }
+            
+            // Удаляем контакт
+            $deleteResult = ContactTable::delete($contactId);
+            
+            if ($deleteResult->isSuccess()) {
+                error_log("DeleteContact: Contact {$contactId} successfully deleted");
+                return true;
+            } else {
+                $errors = $deleteResult->getErrorMessages();
+                error_log("DeleteContact: Failed to delete contact {$contactId}. Errors: " . implode(', ', $errors));
+                return false;
+            }
+            
+        } catch (\Exception $e) {
+            error_log('DeleteContact: Exception - ' . $e->getMessage());
+            return false;
+        }
+    }
 
     private static function findContactByPhone($phone, $companyId = null)
     {

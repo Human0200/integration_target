@@ -105,6 +105,42 @@ $apiFunctions = [
         }
     },
     
+    'deleteContact' => function($params) {
+        try {
+            $contactId = $params['contactId'] ?? null;
+            
+            if (!$contactId) {
+                return [
+                    'success' => false,
+                    'error' => 'Не указан ID контакта'
+                ];
+            }
+            
+            $result = FindContact::deleteContact($contactId);
+            
+            if ($result) {
+                return [
+                    'success' => true,
+                    'data' => [
+                        'message' => 'Контакт успешно удален',
+                        'contactId' => $contactId
+                    ]
+                ];
+            } else {
+                return [
+                    'success' => false,
+                    'error' => 'Не удалось удалить контакт'
+                ];
+            }
+        } catch (\Exception $e) {
+            error_log('Error in deleteContact: ' . $e->getMessage());
+            return [
+                'success' => false,
+                'error' => 'Внутренняя ошибка сервера'
+            ];
+        }
+    },
+    
     'findOrCreateCompany' => function($params) {
         try {
             $companyId = CompanyManager::findOrCreateCompany($params['properties'] ?? []);
@@ -160,6 +196,42 @@ $apiFunctions = [
             }
         } catch (\Exception $e) {
             error_log('Error in updateCompany: ' . $e->getMessage());
+            return [
+                'success' => false,
+                'error' => 'Внутренняя ошибка сервера'
+            ];
+        }
+    },
+    
+    'deleteCompany' => function($params) {
+        try {
+            $companyId = $params['companyId'] ?? null;
+            
+            if (!$companyId) {
+                return [
+                    'success' => false,
+                    'error' => 'Не указан ID компании'
+                ];
+            }
+            
+            $result = CompanyManager::deleteCompany($companyId);
+            
+            if ($result) {
+                return [
+                    'success' => true,
+                    'data' => [
+                        'message' => 'Компания успешно удалена',
+                        'companyId' => $companyId
+                    ]
+                ];
+            } else {
+                return [
+                    'success' => false,
+                    'error' => 'Не удалось удалить компанию'
+                ];
+            }
+        } catch (\Exception $e) {
+            error_log('Error in deleteCompany: ' . $e->getMessage());
             return [
                 'success' => false,
                 'error' => 'Внутренняя ошибка сервера'

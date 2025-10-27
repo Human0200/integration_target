@@ -119,12 +119,25 @@ class CompanyManager
     {
         try {
             self::log("Получение данных компании ID: " . $companyId);
-            $company = new CCrmCompany(false);
-            $result = $company->GetByID($companyId);
-            if ($result === false) {
+            
+            // ИСПРАВЛЕНО: используем статический метод
+            $result = CCrmCompany::GetByID($companyId);
+            
+            self::log("Результат GetByID: " . print_r($result, true));
+            
+            // Проверяем что результат не пустой
+            if ($result === false || empty($result) || !is_array($result)) {
                 self::log("Компания не найдена по ID: " . $companyId);
                 return null;
             }
+            
+            // Дополнительная проверка что ID совпадает
+            if (!isset($result['ID']) || $result['ID'] != $companyId) {
+                self::log("ID не совпадает или отсутствует в результате");
+                return null;
+            }
+            
+            self::log("Компания найдена успешно");
             return $result;
         } catch (\Exception $e) {
             self::log("Ошибка получения компании: " . $e->getMessage());
@@ -240,6 +253,106 @@ class CompanyManager
             self::log("Исключение при обновлении полей компании: " . $e->getMessage());
             return false;
         }
+    }
+    
+    /**
+     * Удаляет компанию по ID с расширенной диагностикой
+     * @param int $companyId ID компании для удаления
+     * @param array $options Дополнительные опции ['force' => true] для принудительного удаления
+     * @return array Результат с детальной информацией
+     */
+public static function deleteCompany($companyId, $options = [])
+{
+    if (empty($companyId)) {
+        self::log('DeleteCompany: Company ID is empty');
+        return false;
+    }
+    
+    try {
+        self::log("=== Удаление компании ID: {$companyId} ===");
+        
+        $bCheckRight = false; // Проверять права
+        $entityObject = new \CCrmCompany($bCheckRight);
+        
+        $deleteOptions = [
+            'CURRENT_USER' => 1,
+            'PROCESS_BIZPROC' => true,
+            'ENABLE_DEFERRED_MODE' => \Bitrix\Crm\Settings\CompanySettings::getCurrent()->isDeferredCleaningEnabled(),
+            'ENABLE_DUP_INDEX_INVALIDATION' => true,
+        ];
+        
+        self::log("Параметры удаления: " . print_r($deleteOptions, true));
+        
+        $deleteResult = $entityObject->Delete($companyId, $deleteOptions);
+        
+        if ($deleteResult) {
+            self::log("Компания {$companyId} успешно удалена");
+            return true;
+        } else {
+            self::log("Ошибка: " . $entityObject->LAST_ERROR);
+            return false;
+        }
+        
+    } catch (\Exception $e) {
+        self::log('Exception: ' . $e->getMessage());
+        return false;
+    }
+}
+    /**
+     * Проверяет связи компании с другими сущностями
+     */
+    private static function checkCompanyRelations($companyId)
+    {
+        $relations = [
+            'contacts' => 0,
+            'deals' => 0,
+            'leads' => 0,
+            'invoices' => 0
+        ];
+        
+        try {
+            // Проверяем контакты
+            if (\Bitrix\Main\Loader::includeModule('crm')) {
+                $contactsCount = \Bitrix\Crm\ContactTable::getCount([
+                    'COMPANY_ID' => $companyId
+                ]);
+                $relations['contacts'] = $contactsCount;
+                self::log("Найдено контактов: " . $contactsCount);
+                
+                // Проверяем сделки
+                $dealsCount = \Bitrix\Crm\DealTable::getCount([
+                    'COMPANY_ID' => $companyId
+                ]);
+                $relations['deals'] = $dealsCount;
+                self::log("Найдено сделок: " . $dealsCount);
+            }
+        } catch (\Exception $e) {
+            self::log("Ошибка проверки связей: " . $e->getMessage());
+        }
+        
+        return $relations;
+    }
+    
+    /**
+     * Возвращает рекомендацию по удалению на основе связей
+     */
+    private static function getDeleteSuggestion($relations)
+    {
+        $suggestions = [];
+        
+        if ($relations['contacts'] > 0) {
+            $suggestions[] = "Компания связана с {$relations['contacts']} контактами. Отвяжите контакты перед удалением.";
+        }
+        
+        if ($relations['deals'] > 0) {
+            $suggestions[] = "Компания связана с {$relations['deals']} сделками. Отвяжите или завершите сделки перед удалением.";
+        }
+        
+        if (empty($suggestions)) {
+            $suggestions[] = "Проверьте права доступа на удаление компаний в CRM.";
+        }
+        
+        return implode(' ', $suggestions);
     }
     
 /**

@@ -1,12 +1,14 @@
-# Contact API Documentation
+# Contact & Company API Documentation
 
-API для работы с контактами в Битрикс24 CRM. Позволяет создавать, искать и обновлять контакты с фильтрацией по компаниям.
+API для работы с контактами и компаниями в Битрикс24 CRM. Позволяет создавать, искать, обновлять и **удалять** контакты и компании с фильтрацией по компаниям.
 
 ## 📋 Содержание
 
 - [Установка](#установка)
 - [Базовое использование](#базовое-использование)
 - [API методы](#api-методы)
+  - [Методы для контактов](#методы-для-контактов)
+  - [Методы для компаний](#методы-для-компаний)
 - [Примеры кода](#примеры-кода)
 - [Обработка ошибок](#обработка-ошибок)
 - [FAQ](#faq)
@@ -18,6 +20,11 @@ API для работы с контактами в Битрикс24 CRM. Поз�
 **Класс FindContact:**
 ```
 /local/modules/leadspace.integrationtarget/lib/classes/FindContact.php
+```
+
+**Класс CompanyManager:**
+```
+/local/modules/leadspace.integrationtarget/lib/classes/CompanyManager.php
 ```
 
 **API хандлер:**
@@ -33,7 +40,8 @@ API для работы с контактами в Битрикс24 CRM. Поз�
 ├── include.php
 └── lib/
     └── classes/
-        └── FindContact.php
+        ├── FindContact.php
+        └── CompanyManager.php
 ```
 
 ### 3. Права доступа
@@ -62,35 +70,11 @@ async function createContact() {
 }
 ```
 
-### PHP (cURL)
-
-```php
-$data = [
-    'action' => 'findOrCreateContact',
-    'params' => [
-        'properties' => [
-            'NAME' => 'Иван Петров',
-            'PHONE' => '+7 999 123-45-67',
-            'EMAIL' => 'ivan@example.com',
-            'COMPANY_ID' => '1'
-        ]
-    ]
-];
-
-$ch = curl_init();
-curl_setopt($ch, CURLOPT_URL, 'https://your-domain.com/local/ajax/handler.php');
-curl_setopt($ch, CURLOPT_POST, true);
-curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($data));
-curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-
-$response = curl_exec($ch);
-$result = json_decode($response, true);
-curl_close($ch);
-```
-
 ## 📡 API методы
 
-### 1. findOrCreateContact
+### Методы для контактов
+
+#### 1. findOrCreateContact
 
 Находит существующий контакт или создает новый.
 
@@ -121,15 +105,7 @@ curl_close($ch);
 }
 ```
 
-**Ответ при ошибке:**
-```json
-{
-    "success": false,
-    "error": "Не удалось найти или создать контакт"
-}
-```
-
-### 2. updateContact
+#### 2. updateContact
 
 Обновляет данные существующего контакта.
 
@@ -159,25 +135,220 @@ curl_close($ch);
 }
 ```
 
-### 3. createAddress
+#### 3. deleteContact ⚠️
 
-Заглушка для создания адреса (пока не реализована).
+**Удаляет контакт из CRM.**
 
 **Параметры:**
 ```javascript
 {
-    action: 'createAddress',
+    action: 'deleteContact',
     params: {
-        requisites: {
-            city: string,
-            street: string,
-            zip: string
+        contactId: number      // ID контакта для удаления
+    }
+}
+```
+
+**Ответ при успехе:**
+```json
+{
+    "success": true,
+    "data": {
+        "message": "Контакт успешно удален",
+        "contactId": 123
+    }
+}
+```
+
+**Ответ при ошибке:**
+```json
+{
+    "success": false,
+    "error": "Не удалось удалить контакт"
+}
+```
+
+### Методы для компаний
+
+#### 1. findOrCreateCompany
+
+Находит существующую компанию или создает новую.
+
+**Параметры:**
+```javascript
+{
+    action: 'findOrCreateCompany',
+    params: {
+        properties: {
+            TITLE: string,      // Название компании (обязательно)
+            PHONE: string,      // Телефон (опционально)
+            EMAIL: string,      // Email (опционально)
+            NAME: string        // Контактное лицо (опционально)
+        }
+    }
+}
+```
+
+**Ответ:**
+```json
+{
+    "success": true,
+    "data": {
+        "companyId": 456
+    }
+}
+```
+
+#### 2. updateCompany
+
+Обновляет данные существующей компании.
+
+**Параметры:**
+```javascript
+{
+    action: 'updateCompany',
+    params: {
+        companyId: number,  // ID компании (обязательно)
+        data: {             // Поля для обновления
+            TITLE: string,
+            COMMENTS: string
+            // Другие поля CRM компании
+        }
+    }
+}
+```
+
+#### 3. deleteCompany ⚠️
+
+**Удаляет компанию из CRM.**
+
+**Параметры:**
+```javascript
+{
+    action: 'deleteCompany',
+    params: {
+        companyId: number      // ID компании для удаления
+    }
+}
+```
+
+**Ответ при успехе:**
+```json
+{
+    "success": true,
+    "data": {
+        "message": "Компания успешно удалена",
+        "companyId": 456
+    }
+}
+```
+
+**Ответ при ошибке:**
+```json
+{
+    "success": false,
+    "error": "Не удалось удалить компанию"
+}
+```
+
+#### 4. createRequisites
+
+Создает или обновляет реквизиты компании.
+
+**Параметры:**
+```javascript
+{
+    action: 'createRequisites',
+    params: {
+        companyId: number,  // ID компании (обязательно)
+        requisites: {       // Реквизиты
+            INN: string,
+            KPP: string,
+            OGRN: string,
+            ADDRESS: string,
+            PHONE: string,
+            EMAIL: string,
+            CONTACT_PERSON: string,
+            RESPONSIBLE_PERSON: string,
+            COMMENT: string
         }
     }
 }
 ```
 
 ## 💡 Примеры кода
+
+### Удаление контакта
+
+```javascript
+async function deleteContactById(contactId) {
+    try {
+        const response = await fetch('/local/ajax/handler.php', {
+            method: 'POST',
+            body: new URLSearchParams({
+                action: 'deleteContact',
+                'params[contactId]': contactId
+            })
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            console.log('Контакт удален:', result.data.contactId);
+            return true;
+        } else {
+            console.error('Ошибка удаления:', result.error);
+            return false;
+        }
+    } catch (error) {
+        console.error('Сетевая ошибка:', error);
+        return false;
+    }
+}
+
+// Использование
+await deleteContactById(123);
+```
+
+### Удаление компании
+
+```javascript
+async function deleteCompanyById(companyId) {
+    try {
+        const response = await fetch('/local/ajax/handler.php', {
+            method: 'POST',
+            body: new URLSearchParams({
+                action: 'deleteCompany',
+                'params[companyId]': companyId
+            })
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            console.log('Компания удалена:', result.data.companyId);
+            return true;
+        } else {
+            console.error('Ошибка удаления:', result.error);
+            return false;
+        }
+    } catch (error) {
+        console.error('Сетевая ошибка:', error);
+        return false;
+    }
+}
+
+// Использование
+await deleteCompanyById(456);
+```
 
 ### Создание контакта с проверкой
 
@@ -226,26 +397,25 @@ const contactId = await createContactSafely({
 });
 ```
 
-### Массовое создание контактов
+### Массовое удаление контактов
 
 ```javascript
-async function bulkCreateContacts(contacts) {
+async function bulkDeleteContacts(contactIds) {
     const results = [];
     
-    for (const contact of contacts) {
+    for (const contactId of contactIds) {
         try {
-            const result = await createContactSafely(contact);
+            const result = await deleteContactById(contactId);
             results.push({
-                contact,
-                contactId: result,
-                success: !!result
+                contactId,
+                success: result
             });
             
             // Пауза между запросами
             await new Promise(resolve => setTimeout(resolve, 200));
         } catch (error) {
             results.push({
-                contact,
+                contactId,
                 error: error.message,
                 success: false
             });
@@ -256,26 +426,22 @@ async function bulkCreateContacts(contacts) {
 }
 
 // Использование
-const contactsToCreate = [
-    { NAME: 'Клиент 1', PHONE: '+7 999 111-11-11', COMPANY_ID: '1' },
-    { NAME: 'Клиент 2', PHONE: '+7 999 222-22-22', COMPANY_ID: '1' },
-    // ...
-];
-
-const results = await bulkCreateContacts(contactsToCreate);
-console.log('Результаты:', results);
+const contactsToDelete = [123, 124, 125];
+const results = await bulkDeleteContacts(contactsToDelete);
+console.log('Результаты удаления:', results);
 ```
 
-### Поиск и обновление контакта
+### Комплексный пример: Поиск, обновление и удаление
 
 ```javascript
-async function findAndUpdateContact(phone, updateData) {
-    // Сначала найдем контакт
+async function manageContact(phone) {
+    // 1. Найти или создать контакт
     const searchResult = await fetch('/local/ajax/handler.php', {
         method: 'POST',
         body: new URLSearchParams({
             action: 'findOrCreateContact',
             'params[properties][PHONE]': phone,
+            'params[properties][NAME]': 'Временный контакт',
             'params[properties][COMPANY_ID]': '1'
         })
     });
@@ -287,27 +453,75 @@ async function findAndUpdateContact(phone, updateData) {
         return false;
     }
     
-    // Теперь обновим контакт
+    const contactId = searchData.data.contactId;
+    console.log('Найден контакт:', contactId);
+    
+    // 2. Обновить данные контакта
     const updateResult = await fetch('/local/ajax/handler.php', {
         method: 'POST',
         body: new URLSearchParams({
             action: 'updateContact',
-            'params[contactId]': searchData.data.contactId,
-            ...Object.entries(updateData).reduce((acc, [key, value]) => {
-                acc[`params[data][${key}]`] = value;
-                return acc;
-            }, {})
+            'params[contactId]': contactId,
+            'params[data][NAME]': 'Обновленное имя',
+            'params[data][COMMENTS]': 'Контакт обновлен'
         })
     });
     
-    return await updateResult.json();
+    const updateData = await updateResult.json();
+    console.log('Контакт обновлен:', updateData);
+    
+    // 3. Удалить контакт
+    const deleteResult = await fetch('/local/ajax/handler.php', {
+        method: 'POST',
+        body: new URLSearchParams({
+            action: 'deleteContact',
+            'params[contactId]': contactId
+        })
+    });
+    
+    const deleteData = await deleteResult.json();
+    console.log('Контакт удален:', deleteData);
+    
+    return deleteData.success;
 }
 
 // Использование
-const result = await findAndUpdateContact('+7 999 123-45-67', {
-    NAME: 'Обновленное имя',
-    COMMENTS: 'Клиент обновлен'
-});
+await manageContact('+7 999 123-45-67');
+```
+
+### PHP пример удаления
+
+```php
+<?php
+function deleteContact($contactId) {
+    $data = [
+        'action' => 'deleteContact',
+        'params' => [
+            'contactId' => $contactId
+        ]
+    ];
+
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, 'https://your-domain.com/local/ajax/handler.php');
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($data));
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+
+    $response = curl_exec($ch);
+    $result = json_decode($response, true);
+    curl_close($ch);
+    
+    return $result;
+}
+
+// Использование
+$result = deleteContact(123);
+if ($result['success']) {
+    echo "Контакт успешно удален\n";
+} else {
+    echo "Ошибка: " . $result['error'] . "\n";
+}
+?>
 ```
 
 ## ⚠️ Обработка ошибок
@@ -318,6 +532,7 @@ const result = await findAndUpdateContact('+7 999 123-45-67', {
 2. **Ошибки валидации** - неверные параметры
 3. **Ошибки CRM** - проблемы с Битрикс24
 4. **Ошибки модуля** - модуль не найден или не загружен
+5. **Ошибки удаления** - не удалось удалить сущность (возможно, она используется)
 
 ### Пример обработки
 
@@ -361,6 +576,8 @@ async function safeAPICall(action, params) {
             alert('Модуль CRM не установлен');
         } else if (error.message.includes('HTTP 500')) {
             alert('Ошибка сервера. Попробуйте позже');
+        } else if (error.message.includes('удалить')) {
+            alert('Не удалось удалить: возможно, сущность используется');
         } else {
             alert('Произошла ошибка: ' + error.message);
         }
@@ -370,7 +587,7 @@ async function safeAPICall(action, params) {
 }
 ```
 
-## 🔍 Особенности поиска
+## 🔍 Особенности
 
 ### Поиск по телефону
 
@@ -383,15 +600,17 @@ API автоматически обрабатывает различные фо�
 - `+79991234567`
 - `7 999 123 45 67`
 
-Все эти форматы приведутся к единому виду для поиска.
-
 ### Фильтрация по компании
 
-API ищет контакты **только** с заполненным `COMPANY_ID`. Это означает:
+API ищет контакты **только** с заполненным `COMPANY_ID`.
 
-- Если передан `COMPANY_ID` - поиск только в этой компании
-- Если не передан - поиск среди всех контактов с любой компанией
-- Контакты без компании игнорируются
+### Удаление сущностей
+
+⚠️ **Важно:** 
+- Удаление безвозвратно
+- Проверяйте ID перед удалением
+- Удаление компании не удаляет связанные контакты автоматически
+- При удалении контакта связь с компанией разрывается
 
 ## ❓ FAQ
 
@@ -403,6 +622,18 @@ A: Проверьте:
 3. Загружен ли модуль CRM
 4. Есть ли права на создание контактов
 
+### Q: Можно ли отменить удаление?
+
+A: Нет, удаление безвозвратно. Битрикс24 не имеет встроенной корзины для удаленных контактов и компаний через API.
+
+### Q: Что происходит при удалении компании?
+
+A: Удаляется только компания. Связанные контакты остаются в системе, но теряют связь с этой компанией.
+
+### Q: Нужны ли особые права для удаления?
+
+A: Да, пользователь должен иметь права на удаление контактов/компаний в CRM Битрикс24.
+
 ### Q: Как найти контакт без создания нового?
 
 A: API всегда сначала ищет существующий контакт. Если он найден - возвращается его ID без создания дубликата.
@@ -411,23 +642,28 @@ A: API всегда сначала ищет существующий конта�
 
 A: Нет, API специально фильтрует только контакты с заполненным COMPANY_ID.
 
-### Q: Поддерживаются ли другие поля контакта?
-
-A: В методе `updateContact` можно передать любые стандартные поля контактов Битрикс24.
-
-### Q: Что происходит при обновлении телефонов/email?
-
-A: API проверяет существующие номера и email, добавляя новые только если их еще нет у контакта.
-
 ## 🔧 Отладка
 
 Для отладки проблем:
 
 1. Проверьте логи PHP: `/var/log/php_errors.log`
-2. Включите отладку в коде:
+2. Проверьте логи CompanyManager: `lib/classes/company_manager.txt`
+3. Включите отладку в коде:
    ```php
    error_reporting(E_ALL);
    ini_set('display_errors', 1);
    ```
-3. Используйте тестовый интерфейс для проверки работы API
-4. Проверьте права доступа к файлам модуля
+4. Используйте тестовый интерфейс для проверки работы API
+5. Проверьте права доступа к файлам модуля
+
+## 📊 Полный список методов
+
+| Метод | Описание | Параметры |
+|-------|----------|-----------|
+| `findOrCreateContact` | Найти или создать контакт | properties |
+| `updateContact` | Обновить контакт | contactId, data |
+| `deleteContact` | **Удалить контакт** | contactId |
+| `findOrCreateCompany` | Найти или создать компанию | properties |
+| `updateCompany` | Обновить компанию | companyId, data |
+| `deleteCompany` | **Удалить компанию** | companyId |
+| `createRequisites` | Создать реквизиты | companyId, requisites |
