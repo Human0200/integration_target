@@ -61,23 +61,32 @@ $userId = $USER->GetID();
 $userFields = \CUser::GetByID($userId)->Fetch();
 $targetLogin = isset($userFields['UF_TARGET_LOGIN']) ? $userFields['UF_TARGET_LOGIN'] : '';
 $targetPassword = isset($userFields['UF_TARGET_PASSWORD']) ? $userFields['UF_TARGET_PASSWORD'] : '';
+$targetApiKey = isset($userFields['UF_APIKEY']) ? $userFields['UF_APIKEY'] : '';
 
 // Формируем URL для iframe
 $url = 'https://test.targetco.ru';
 
 // Специальная обработка для компаний
 if ($entityType === 'company' && $entityId > 0) {
-    // Получаем поле UF_CRM_1760515262922 компании
     $company = CompanyTable::getList([
         'filter' => ['=ID' => $entityId],
         'select' => ['ID', 'UF_CRM_1760515262922']
     ])->fetch();
     
     if ($company && !empty($company['UF_CRM_1760515262922'])) {
-        // Для компании используем специальный URL с user_id из поля компании
-        $url = 'https://test.targetco.ru/offers#user_id=' . $company['UF_CRM_1760515262922'];
+        // Добавляем параметры к URL с хешем
+        $params = [];
+        if (!empty($targetLogin)) {
+            $params['email'] = $targetLogin;
+        }
+        if (!empty($targetPassword)) {
+            $params['password'] = $targetPassword;
+        }
+        $params['userId'] = $userId;
+        $params['token'] = $targetApiKey; 
+        
+        $url = 'https://test.targetco.ru/offers?' . http_build_query($params) . '#user_id=' . $company['UF_CRM_1760515262922'];
     } else {
-        // Если поле не заполнено, формируем обычный URL
         $params = [];
         $params['entityType'] = $entityType;
         $params['entityId'] = $entityId;
@@ -89,32 +98,8 @@ if ($entityType === 'company' && $entityId > 0) {
             $params['password'] = $targetPassword;
         }
         $params['userId'] = $userId;
+        $params['token'] = $targetApiKey; 
         
-        $url .= '?' . http_build_query($params);
-    }
-} else {
-    // Для остальных сущностей формируем обычный URL
-    $params = [];
-    
-    // Добавляем параметры сущности
-    if ($entityType !== '' && $entityId > 0) {
-        $params['entityType'] = $entityType;
-        $params['entityId'] = $entityId;
-    }
-    
-    // Добавляем пользовательские поля
-    if (!empty($targetLogin)) {
-        $params['email'] = $targetLogin;
-    }
-    if (!empty($targetPassword)) {
-        $params['password'] = $targetPassword;
-    }
-    
-    // Добавляем ID пользователя
-    $params['userId'] = $userId;
-    
-    // Формируем полный URL
-    if (!empty($params)) {
         $url .= '?' . http_build_query($params);
     }
 }
