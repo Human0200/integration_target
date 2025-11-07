@@ -19,99 +19,116 @@ class CompanyManager
         file_put_contents($logFile, "[{$timestamp}] {$message}\n", FILE_APPEND);
     }
 
-    public static function findOrCreateCompany($properties)
-    {
-        self::log("=== Начало findOrCreateCompany ===");
-        self::log("Входящие данные: " . print_r($properties, true));
+public static function findOrCreateCompany($properties)
+{
+    self::log("=== Начало findOrCreateCompany ===");
+    self::log("Входящие данные: " . print_r($properties, true));
 
-        $phone = $properties['PHONE'] ?? null;
-        $email = $properties['EMAIL'] ?? null;
-        $title = $properties['TITLE'] ?? $properties['COMPANY'] ?? 'Компания из интернет-магазина';
-        $inn = $properties['INN'] ?? null;
+    $phone = $properties['PHONE'] ?? null;
+    $email = $properties['EMAIL'] ?? null;
+    $title = $properties['TITLE'] ?? $properties['COMPANY'] ?? 'Компания из интернет-магазина';
+    $inn = $properties['INN'] ?? null;
 
-        self::log("PHONE: " . ($phone ?? 'не задан'));
-        self::log("EMAIL: " . ($email ?? 'не задан'));
-        self::log("TITLE: " . $title);
-        self::log("INN: " . ($inn ?? 'не задан'));
+    self::log("PHONE: " . ($phone ?? 'не задан'));
+    self::log("EMAIL: " . ($email ?? 'не задан'));
+    self::log("TITLE: " . $title);
+    self::log("INN: " . ($inn ?? 'не задан'));
 
-        // Проверяем обязательные поля
-        if (!$title && !$inn && !$phone && !$email) {
-            self::log("Ошибка: не переданы обязательные поля");
-            return null;
-        }
-
-        // Ищем компанию по ИНН, телефону или email
-        $companyId = null;
-
-        if ($inn) {
-            self::log("Поиск компании по ИНН...");
-            $companyId = self::findCompanyByINN($inn);
-            self::log("Результат поиска по ИНН: " . ($companyId ?? 'не найдено'));
-        }
-
-        if (!$companyId && $phone) {
-            self::log("Поиск компании по телефону...");
-            $companyId = self::findCompanyByPhone($phone);
-            self::log("Результат поиска по телефону: " . ($companyId ?? 'не найдено'));
-        }
-
-        if (!$companyId && $email) {
-            self::log("Поиск компании по email...");
-            $companyId = self::findCompanyByEmail($email);
-            self::log("Результат поиска по email: " . ($companyId ?? 'не найдено'));
-        }
-
-        // Если компания не найдена - создаем новую
-        if (!$companyId) {
-            self::log("Компания не найдена, создаем новую...");
-            
-            $companyFields = [
-                'TITLE' => $title,
-                'COMPANY_TYPE' => 'CUSTOMER',
-                'ASSIGNED_BY_ID' => 1, // Ответственный
-                'CREATED_BY_ID' => 1,  // Создал
-            ];
-
-            // Добавляем ИНН и КПП если есть
-            if ($inn) {
-                $companyFields['UF_CRM_INN'] = $inn;
-            }
-            
-            if (isset($properties['KPP'])) {
-                $companyFields['UF_CRM_KPP'] = $properties['KPP'];
-            }
-
-            // Добавляем мультиполя
-            $companyFields['FM'] = [];
-            
-            if ($phone) {
-                $companyFields['FM']['PHONE'] = [
-                    'n0' => [
-                        'VALUE' => $phone,
-                        'VALUE_TYPE' => 'WORK'
-                    ]
-                ];
-            }
-
-            if ($email) {
-                $companyFields['FM']['EMAIL'] = [
-                    'n0' => [
-                        'VALUE' => $email,
-                        'VALUE_TYPE' => 'WORK'
-                    ]
-                ];
-            }
-
-            self::log("Поля для создания компании: " . print_r($companyFields, true));
-            $companyId = self::createCompany($companyFields);
-            self::log("Результат создания компании: " . ($companyId ?? 'ошибка'));
-        } else {
-            self::log("Компания найдена ID: " . $companyId);
-        }
-
-        self::log("=== Завершение findOrCreateCompany, результат: " . ($companyId ?? 'null') . " ===\n");
-        return $companyId;
+    // Проверяем обязательные поля
+    if (!$title && !$inn && !$phone && !$email) {
+        self::log("Ошибка: не переданы обязательные поля");
+        return null;
     }
+
+    // Ищем компанию по ИНН, телефону или email
+    $companyId = null;
+
+    if ($inn) {
+        self::log("Поиск компании по ИНН...");
+        $companyId = self::findCompanyByINN($inn);
+        self::log("Результат поиска по ИНН: " . ($companyId ?? 'не найдено'));
+    }
+
+    if (!$companyId && $phone) {
+        self::log("Поиск компании по телефону...");
+        $companyId = self::findCompanyByPhone($phone);
+        self::log("Результат поиска по телефону: " . ($companyId ?? 'не найдено'));
+    }
+
+    if (!$companyId && $email) {
+        self::log("Поиск компании по email...");
+        $companyId = self::findCompanyByEmail($email);
+        self::log("Результат поиска по email: " . ($companyId ?? 'не найдено'));
+    }
+
+    // Если компания не найдена - создаем новую
+    if (!$companyId) {
+        self::log("Компания не найдена, создаем новую...");
+        
+        $companyFields = [
+            'TITLE' => $title,
+            'COMPANY_TYPE' => 'CUSTOMER',
+            'ASSIGNED_BY_ID' => 1, // Ответственный
+            'CREATED_BY_ID' => 1,  // Создал
+        ];
+
+        // Добавляем все остальные поля из properties (кроме PHONE, EMAIL, TITLE)
+        foreach ($properties as $key => $value) {
+            if (!in_array($key, ['PHONE', 'EMAIL', 'TITLE', 'COMPANY'])) {
+                $companyFields[$key] = $value;
+            }
+        }
+
+        // Добавляем мультиполя
+        $companyFields['FM'] = [];
+        
+        if ($phone) {
+            $companyFields['FM']['PHONE'] = [
+                'n0' => [
+                    'VALUE' => $phone,
+                    'VALUE_TYPE' => 'WORK'
+                ]
+            ];
+        }
+
+        if ($email) {
+            $companyFields['FM']['EMAIL'] = [
+                'n0' => [
+                    'VALUE' => $email,
+                    'VALUE_TYPE' => 'WORK'
+                ]
+            ];
+        }
+
+        self::log("Поля для создания компании: " . print_r($companyFields, true));
+        $companyId = self::createCompany($companyFields);
+        self::log("Результат создания компании: " . ($companyId ?? 'ошибка'));
+    } else {
+        self::log("Компания найдена ID: " . $companyId . ", обновляем поля...");
+        
+        // ИСПРАВЛЕНИЕ: Обновляем все переданные поля
+        $updateFields = [];
+        
+        // Добавляем все поля из properties
+        foreach ($properties as $key => $value) {
+            $updateFields[$key] = $value;
+        }
+        
+        self::log("Поля для обновления: " . print_r($updateFields, true));
+        
+        // Используем универсальный метод обновления
+        $result = self::updateCompanyFields($companyId, $updateFields);
+        
+        if ($result) {
+            self::log("Компания успешно обновлена");
+        } else {
+            self::log("Ошибка обновления компании");
+        }
+    }
+
+    self::log("=== Завершение findOrCreateCompany, результат: " . ($companyId ?? 'null') . " ===\n");
+    return $companyId;
+}
     
     /**
      * Создает новую компанию
