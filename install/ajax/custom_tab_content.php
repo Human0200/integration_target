@@ -61,8 +61,6 @@ $userId = $USER->GetID();
 
 // Получаем пользовательские поля пользователя
 $userFields = \CUser::GetByID($userId)->Fetch();
-$targetLogin = isset($userFields['UF_TARGET_LOGIN']) ? $userFields['UF_TARGET_LOGIN'] : '';
-$targetPassword = isset($userFields['UF_TARGET_PASSWORD']) ? $userFields['UF_TARGET_PASSWORD'] : '';
 $targetApiKey = isset($userFields['UF_APIKEY']) ? $userFields['UF_APIKEY'] : '';
 
 // Получаем Target ID компании
@@ -100,19 +98,16 @@ if ($entityType === 'company' && $entityId > 0) {
 // Формируем URL для iframe
 $url = 'https://test.targetco.ru';
 
-// Формируем параметры URL
+// Формируем параметры URL (без логина и пароля)
 $params = [];
 $params['entityType'] = $entityType;
 $params['entityId'] = $entityId;
-
-if (!empty($targetLogin)) {
-    $params['email'] = $targetLogin;
-}
-if (!empty($targetPassword)) {
-    $params['password'] = $targetPassword;
-}
 $params['userId'] = $userId;
-$params['token'] = $targetApiKey;
+
+// Передаем только API ключ для аутентификации
+if (!empty($targetApiKey)) {
+    $params['token'] = $targetApiKey;
+}
 
 // Добавляем Target ID компании, если найден
 if (!empty($targetCompanyId)) {
