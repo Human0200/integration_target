@@ -1,4 +1,5 @@
 <?php
+
 define('NO_KEEP_STATISTIC', 'Y');
 define('NO_AGENT_STATISTIC', 'Y');
 define('NO_AGENT_CHECK', true);
@@ -23,6 +24,7 @@ if (!check_bitrix_sessid()) {
 use Bitrix\Main\Application;
 use Bitrix\Main\Loader;
 use Bitrix\Crm\CompanyTable;
+use Bitrix\Crm\DealTable;
 
 if (!Loader::includeModule('crm') || !Loader::includeModule('main')) {
     die('Необходимые модули не подключены');
@@ -63,45 +65,65 @@ $targetLogin = isset($userFields['UF_TARGET_LOGIN']) ? $userFields['UF_TARGET_LO
 $targetPassword = isset($userFields['UF_TARGET_PASSWORD']) ? $userFields['UF_TARGET_PASSWORD'] : '';
 $targetApiKey = isset($userFields['UF_APIKEY']) ? $userFields['UF_APIKEY'] : '';
 
-// Формируем URL для iframe
-$url = 'https://test.targetco.ru';
+// Получаем Target ID компании
+$targetCompanyId = null;
 
-// Специальная обработка для компаний
 if ($entityType === 'company' && $entityId > 0) {
+    // Если это компания - берем напрямую
     $company = CompanyTable::getList([
         'filter' => ['=ID' => $entityId],
         'select' => ['ID', 'UF_CRM_1760515262922']
     ])->fetch();
     
     if ($company && !empty($company['UF_CRM_1760515262922'])) {
-        // Добавляем параметры к URL с хешем
-        $params = [];
-        if (!empty($targetLogin)) {
-            $params['email'] = $targetLogin;
-        }
-        if (!empty($targetPassword)) {
-            $params['password'] = $targetPassword;
-        }
-        $params['userId'] = $userId;
-        $params['token'] = $targetApiKey; 
-        
-        $url = 'https://test.targetco.ru/offers?' . http_build_query($params) . '#user_id=' . $company['UF_CRM_1760515262922'];
-    } else {
-        $params = [];
-        $params['entityType'] = $entityType;
-        $params['entityId'] = $entityId;
-        
-        if (!empty($targetLogin)) {
-            $params['email'] = $targetLogin;
-        }
-        if (!empty($targetPassword)) {
-            $params['password'] = $targetPassword;
-        }
-        $params['userId'] = $userId;
-        $params['token'] = $targetApiKey; 
-        
-        $url .= '?' . http_build_query($params);
+        $targetCompanyId = $company['UF_CRM_1760515262922'];
     }
+} elseif ($entityType === 'deal' && $entityId > 0) {
+    // Если это сделка - находим связанную компанию
+    $deal = DealTable::getList([
+        'filter' => ['=ID' => $entityId],
+        'select' => ['ID', 'COMPANY_ID']
+    ])->fetch();
+    
+    if ($deal && !empty($deal['COMPANY_ID'])) {
+        $company = CompanyTable::getList([
+            'filter' => ['=ID' => $deal['COMPANY_ID']],
+            'select' => ['ID', 'UF_CRM_1760515262922']
+        ])->fetch();
+        
+        if ($company && !empty($company['UF_CRM_1760515262922'])) {
+            $targetCompanyId = $company['UF_CRM_1760515262922'];
+        }
+    }
+}
+
+// Формируем URL для iframe
+$url = 'https://test.targetco.ru';
+
+// Формируем параметры URL
+$params = [];
+$params['entityType'] = $entityType;
+$params['entityId'] = $entityId;
+
+if (!empty($targetLogin)) {
+    $params['email'] = $targetLogin;
+}
+if (!empty($targetPassword)) {
+    $params['password'] = $targetPassword;
+}
+$params['userId'] = $userId;
+$params['token'] = $targetApiKey;
+
+// Добавляем Target ID компании, если найден
+if (!empty($targetCompanyId)) {
+    $params['targetCompanyId'] = $targetCompanyId;
+}
+
+// Специальная обработка для компаний с Target ID
+if ($entityType === 'company' && !empty($targetCompanyId)) {
+    $url = 'https://test.targetco.ru/offers?' . http_build_query($params) . '#user_id=' . $targetCompanyId;
+} else {
+    $url .= '?' . http_build_query($params);
 }
 
 // Выводим iframe с адаптивной высотой
@@ -116,6 +138,8 @@ if ($entityType === 'company' && $entityId > 0) {
         onload="this.style.height = (this.contentWindow.document.body.scrollHeight + 20) + 'px';">
     </iframe>
 </div>
+
 <script>
 console.log('URL: ' + '<?= htmlspecialcharsbx($url) ?>');
+console.log('Target Company ID: ' + '<?= $targetCompanyId ?>');
 </script>

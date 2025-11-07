@@ -8,9 +8,15 @@ class CompanyManager
 {
     private static function log($message)
     {
-        $logFile = __DIR__ . '/company_manager.txt';
+        $logFile = $_SERVER['DOCUMENT_ROOT'] . '/local/logs/company_manager.log';
+        $logDir = dirname($logFile);
+        
+        if (!is_dir($logDir)) {
+            mkdir($logDir, 0755, true);
+        }
+        
         $timestamp = date('Y-m-d H:i:s');
-        file_put_contents($logFile, "[{$timestamp}] {$message}\n", FILE_APPEND | LOCK_EX);
+        file_put_contents($logFile, "[{$timestamp}] {$message}\n", FILE_APPEND);
     }
 
     public static function findOrCreateCompany($properties)
@@ -21,21 +27,29 @@ class CompanyManager
         $phone = $properties['PHONE'] ?? null;
         $email = $properties['EMAIL'] ?? null;
         $title = $properties['TITLE'] ?? $properties['COMPANY'] ?? 'Компания из интернет-магазина';
-        $name = $properties['NAME'] ?? $title;
+        $inn = $properties['INN'] ?? null;
 
         self::log("PHONE: " . ($phone ?? 'не задан'));
         self::log("EMAIL: " . ($email ?? 'не задан'));
         self::log("TITLE: " . $title);
+        self::log("INN: " . ($inn ?? 'не задан'));
 
-        if (!$phone && !$email) {
-            self::log("Ошибка: не переданы PHONE и EMAIL");
+        // Проверяем обязательные поля
+        if (!$title && !$inn && !$phone && !$email) {
+            self::log("Ошибка: не переданы обязательные поля");
             return null;
         }
 
-        // Ищем компанию по телефону или email
+        // Ищем компанию по ИНН, телефону или email
         $companyId = null;
 
-        if ($phone) {
+        if ($inn) {
+            self::log("Поиск компании по ИНН...");
+            $companyId = self::findCompanyByINN($inn);
+            self::log("Результат поиска по ИНН: " . ($companyId ?? 'не найдено'));
+        }
+
+        if (!$companyId && $phone) {
             self::log("Поиск компании по телефону...");
             $companyId = self::findCompanyByPhone($phone);
             self::log("Результат поиска по телефону: " . ($companyId ?? 'не найдено'));
@@ -50,10 +64,22 @@ class CompanyManager
         // Если компания не найдена - создаем новую
         if (!$companyId) {
             self::log("Компания не найдена, создаем новую...");
+            
             $companyFields = [
                 'TITLE' => $title,
-                'COMPANY_TYPE' => 'CUSTOMER', // Клиент
+                'COMPANY_TYPE' => 'CUSTOMER',
+                'ASSIGNED_BY_ID' => 1, // Ответственный
+                'CREATED_BY_ID' => 1,  // Создал
             ];
+
+            // Добавляем ИНН и КПП если есть
+            if ($inn) {
+                $companyFields['UF_CRM_INN'] = $inn;
+            }
+            
+            if (isset($properties['KPP'])) {
+                $companyFields['UF_CRM_KPP'] = $properties['KPP'];
+            }
 
             // Добавляем мультиполя
             $companyFields['FM'] = [];
@@ -80,9 +106,7 @@ class CompanyManager
             $companyId = self::createCompany($companyFields);
             self::log("Результат создания компании: " . ($companyId ?? 'ошибка'));
         } else {
-            self::log("Компания найдена, обновляем данные. ID: " . $companyId);
-            // Если компания найдена, обновляем её данные
-            self::updateCompany($companyId, $title, $phone, $email);
+            self::log("Компания найдена ID: " . $companyId);
         }
 
         self::log("=== Завершение findOrCreateCompany, результат: " . ($companyId ?? 'null') . " ===\n");
@@ -120,18 +144,13 @@ class CompanyManager
         try {
             self::log("Получение данных компании ID: " . $companyId);
             
-            // ИСПРАВЛЕНО: используем статический метод
             $result = CCrmCompany::GetByID($companyId);
             
-            self::log("Результат GetByID: " . print_r($result, true));
-            
-            // Проверяем что результат не пустой
             if ($result === false || empty($result) || !is_array($result)) {
                 self::log("Компания не найдена по ID: " . $companyId);
                 return null;
             }
             
-            // Дополнительная проверка что ID совпадает
             if (!isset($result['ID']) || $result['ID'] != $companyId) {
                 self::log("ID не совпадает или отсутствует в результате");
                 return null;
@@ -146,374 +165,326 @@ class CompanyManager
     }
     
     /**
-     * Обновляет данные компании
-     */
-    private static function updateCompany($companyId, $title, $phone, $email)
-    {
-        try {
-            self::log("Обновление компании ID: " . $companyId);
-            $updateFields = [
-                'TITLE' => $title,
-            ];
-            
-            // Получаем текущие данные компании
-            $currentCompany = self::getCompany($companyId);
-            
-            if ($currentCompany) {
-                self::log("Текущие данные компании получены");
-                // Получаем текущие телефоны и emails
-                $currentPhones = CCrmFieldMulti::GetList(
-                    ['ID' => 'asc'],
-                    ['ENTITY_ID' => 'COMPANY', 'ELEMENT_ID' => $companyId, 'TYPE_ID' => 'PHONE']
-                );
-                
-                $currentEmails = CCrmFieldMulti::GetList(
-                    ['ID' => 'asc'],
-                    ['ENTITY_ID' => 'COMPANY', 'ELEMENT_ID' => $companyId, 'TYPE_ID' => 'EMAIL']
-                );
-                
-                $updateFields['FM'] = [];
-                
-                // Проверяем и добавляем телефон, если его еще нет
-                if ($phone && !self::companyHasPhoneValue($currentPhones, $phone)) {
-                    self::log("Добавляем новый телефон: " . $phone);
-                    $phoneCount = 0;
-                    $currentPhones = CCrmFieldMulti::GetList(
-                        ['ID' => 'asc'],
-                        ['ENTITY_ID' => 'COMPANY', 'ELEMENT_ID' => $companyId, 'TYPE_ID' => 'PHONE']
-                    );
-                    while ($phoneData = $currentPhones->Fetch()) {
-                        $updateFields['FM']['PHONE']['n' . $phoneCount] = [
-                            'VALUE' => $phoneData['VALUE'],
-                            'VALUE_TYPE' => $phoneData['VALUE_TYPE']
-                        ];
-                        $phoneCount++;
-                    }
-                    $updateFields['FM']['PHONE']['n' . $phoneCount] = [
-                        'VALUE' => $phone,
-                        'VALUE_TYPE' => 'WORK'
-                    ];
-                }
-                
-                // Проверяем и добавляем email, если его еще нет
-                if ($email && !self::companyHasEmailValue($currentEmails, $email)) {
-                    self::log("Добавляем новый email: " . $email);
-                    $emailCount = 0;
-                    $currentEmails = CCrmFieldMulti::GetList(
-                        ['ID' => 'asc'],
-                        ['ENTITY_ID' => 'COMPANY', 'ELEMENT_ID' => $companyId, 'TYPE_ID' => 'EMAIL']
-                    );
-                    while ($emailData = $currentEmails->Fetch()) {
-                        $updateFields['FM']['EMAIL']['n' . $emailCount] = [
-                            'VALUE' => $emailData['VALUE'],
-                            'VALUE_TYPE' => $emailData['VALUE_TYPE']
-                        ];
-                        $emailCount++;
-                    }
-                    $updateFields['FM']['EMAIL']['n' . $emailCount] = [
-                        'VALUE' => $email,
-                        'VALUE_TYPE' => 'WORK'
-                    ];
-                }
-            }
-            
-            self::log("Поля для обновления: " . print_r($updateFields, true));
-            // Обновляем компанию
-            $company = new CCrmCompany(false);
-            $result = $company->Update($companyId, $updateFields);
-            if ($result) {
-                self::log("Компания успешно обновлена");
-            } else {
-                self::log("Ошибка обновления компании: " . $company->LAST_ERROR);
-            }
-            
-        } catch (\Exception $e) {
-            self::log("Исключение при обновлении компании: " . $e->getMessage());
-        }
-    }
-    
-    /**
-     * Обновляет поля компании
+     * Универсальное обновление полей компании
+     * Принимает любые поля для обновления
      */
     public static function updateCompanyFields($companyId, $fields)
     {
         try {
-            self::log("Обновление полей компании ID: " . $companyId);
-            self::log("Поля для обновления: " . print_r($fields, true));
-            $company = new CCrmCompany(false);
-            $result = $company->Update($companyId, $fields);
-            if ($result) {
-                self::log("Поля компании успешно обновлены");
-                return $companyId;
-            } else {
-                self::log("Ошибка обновления полей компании: " . $company->LAST_ERROR);
+            self::log("=== Обновление компании ID: {$companyId} ===");
+            self::log("Входящие поля для обновления: " . print_r($fields, true));
+            
+            if (empty($companyId)) {
+                self::log("Ошибка: пустой ID компании");
                 return false;
             }
+            
+            // Проверяем существование компании
+            $company = self::getCompany($companyId);
+            if (!$company) {
+                self::log("Ошибка: компания с ID {$companyId} не найдена");
+                return false;
+            }
+            
+            // Разделяем поля на обычные и мультиполя
+            $updateFields = [];
+            $multiFields = [];
+            
+            foreach ($fields as $fieldName => $fieldValue) {
+                // Обрабатываем мультиполя отдельно
+                if ($fieldName === 'PHONE' || $fieldName === 'EMAIL') {
+                    $multiFields[$fieldName] = $fieldValue;
+                } else {
+                    // Все остальные поля - обычные поля компании
+                    $updateFields[$fieldName] = $fieldValue;
+                }
+            }
+            
+            self::log("Обычные поля: " . print_r($updateFields, true));
+            self::log("Мультиполя: " . print_r($multiFields, true));
+            
+            // Обновляем обычные поля если они есть
+            if (!empty($updateFields)) {
+                $crmCompany = new CCrmCompany(false);
+                $result = $crmCompany->Update($companyId, $updateFields);
+                
+                if ($result) {
+                    self::log("Обычные поля успешно обновлены");
+                } else {
+                    self::log("Ошибка обновления обычных полей: " . $crmCompany->LAST_ERROR);
+                    return false;
+                }
+            }
+            
+            // Обновляем мультиполя если они есть
+            if (!empty($multiFields)) {
+                $result = self::updateMultiFields($companyId, $multiFields);
+                if (!$result) {
+                    self::log("Ошибка обновления мультиполей");
+                    return false;
+                }
+            }
+            
+            self::log("=== Компания успешно обновлена ===");
+            return $companyId;
+            
         } catch (\Exception $e) {
             self::log("Исключение при обновлении полей компании: " . $e->getMessage());
+            self::log("Stack trace: " . $e->getTraceAsString());
             return false;
         }
     }
     
     /**
-     * Удаляет компанию по ID с расширенной диагностикой
-     * @param int $companyId ID компании для удаления
-     * @param array $options Дополнительные опции ['force' => true] для принудительного удаления
-     * @return array Результат с детальной информацией
+     * Обновляет мультиполя компании (телефоны, email)
      */
-public static function deleteCompany($companyId, $options = [])
-{
-    if (empty($companyId)) {
-        self::log('DeleteCompany: Company ID is empty');
-        return false;
-    }
-    
-    try {
-        self::log("=== Удаление компании ID: {$companyId} ===");
-        
-        $bCheckRight = false; // Проверять права
-        $entityObject = new \CCrmCompany($bCheckRight);
-        
-        $deleteOptions = [
-            'CURRENT_USER' => 1,
-            'PROCESS_BIZPROC' => true,
-            'ENABLE_DEFERRED_MODE' => \Bitrix\Crm\Settings\CompanySettings::getCurrent()->isDeferredCleaningEnabled(),
-            'ENABLE_DUP_INDEX_INVALIDATION' => true,
-        ];
-        
-        self::log("Параметры удаления: " . print_r($deleteOptions, true));
-        
-        $deleteResult = $entityObject->Delete($companyId, $deleteOptions);
-        
-        if ($deleteResult) {
-            self::log("Компания {$companyId} успешно удалена");
-            return true;
-        } else {
-            self::log("Ошибка: " . $entityObject->LAST_ERROR);
-            return false;
-        }
-        
-    } catch (\Exception $e) {
-        self::log('Exception: ' . $e->getMessage());
-        return false;
-    }
-}
-    /**
-     * Проверяет связи компании с другими сущностями
-     */
-    private static function checkCompanyRelations($companyId)
+    private static function updateMultiFields($companyId, $multiFields)
     {
-        $relations = [
-            'contacts' => 0,
-            'deals' => 0,
-            'leads' => 0,
-            'invoices' => 0
-        ];
+        try {
+            self::log("Обновление мультиполей для компании {$companyId}");
+            
+            $fieldMulti = new CCrmFieldMulti();
+            $updateData = [];
+            
+            foreach ($multiFields as $fieldType => $fieldValue) {
+                // Получаем существующие значения
+                $existingFields = CCrmFieldMulti::GetList(
+                    ['ID' => 'asc'],
+                    [
+                        'ENTITY_ID' => 'COMPANY',
+                        'ELEMENT_ID' => $companyId,
+                        'TYPE_ID' => $fieldType
+                    ]
+                );
+                
+                // Проверяем, нужно ли добавлять новое значение
+                $valueExists = false;
+                $counter = 0;
+                
+                while ($field = $existingFields->Fetch()) {
+                    $updateData[$fieldType]['n' . $counter] = [
+                        'VALUE' => $field['VALUE'],
+                        'VALUE_TYPE' => $field['VALUE_TYPE']
+                    ];
+                    
+                    // Проверяем совпадение значения
+                    if ($fieldType === 'PHONE') {
+                        if (self::normalizePhone($field['VALUE']) === self::normalizePhone($fieldValue)) {
+                            $valueExists = true;
+                        }
+                    } else {
+                        if (strtolower(trim($field['VALUE'])) === strtolower(trim($fieldValue))) {
+                            $valueExists = true;
+                        }
+                    }
+                    
+                    $counter++;
+                }
+                
+                // Добавляем новое значение если его еще нет
+                if (!$valueExists) {
+                    $updateData[$fieldType]['n' . $counter] = [
+                        'VALUE' => $fieldValue,
+                        'VALUE_TYPE' => 'WORK'
+                    ];
+                    self::log("Добавляем новое значение {$fieldType}: {$fieldValue}");
+                } else {
+                    self::log("Значение {$fieldType}: {$fieldValue} уже существует");
+                }
+            }
+            
+            // Применяем изменения
+            if (!empty($updateData)) {
+                $fieldMulti->SetFields('COMPANY', $companyId, $updateData);
+                self::log("Мультиполя успешно обновлены");
+            }
+            
+            return true;
+            
+        } catch (\Exception $e) {
+            self::log("Ошибка обновления мультиполей: " . $e->getMessage());
+            return false;
+        }
+    }
+    
+    /**
+     * Удаляет компанию по ID
+     */
+    public static function deleteCompany($companyId, $options = [])
+    {
+        if (empty($companyId)) {
+            self::log('DeleteCompany: Company ID is empty');
+            return false;
+        }
         
         try {
-            // Проверяем контакты
-            if (\Bitrix\Main\Loader::includeModule('crm')) {
-                $contactsCount = \Bitrix\Crm\ContactTable::getCount([
-                    'COMPANY_ID' => $companyId
-                ]);
-                $relations['contacts'] = $contactsCount;
-                self::log("Найдено контактов: " . $contactsCount);
-                
-                // Проверяем сделки
-                $dealsCount = \Bitrix\Crm\DealTable::getCount([
-                    'COMPANY_ID' => $companyId
-                ]);
-                $relations['deals'] = $dealsCount;
-                self::log("Найдено сделок: " . $dealsCount);
+            self::log("=== Удаление компании ID: {$companyId} ===");
+            
+            $bCheckRight = false;
+            $entityObject = new \CCrmCompany($bCheckRight);
+            
+            $deleteOptions = [
+                'CURRENT_USER' => 1,
+                'PROCESS_BIZPROC' => true,
+                'ENABLE_DEFERRED_MODE' => \Bitrix\Crm\Settings\CompanySettings::getCurrent()->isDeferredCleaningEnabled(),
+                'ENABLE_DUP_INDEX_INVALIDATION' => true,
+            ];
+            
+            self::log("Параметры удаления: " . print_r($deleteOptions, true));
+            
+            $deleteResult = $entityObject->Delete($companyId, $deleteOptions);
+            
+            if ($deleteResult) {
+                self::log("Компания {$companyId} успешно удалена");
+                return true;
+            } else {
+                self::log("Ошибка: " . $entityObject->LAST_ERROR);
+                return false;
             }
+            
         } catch (\Exception $e) {
-            self::log("Ошибка проверки связей: " . $e->getMessage());
+            self::log('Exception: ' . $e->getMessage());
+            return false;
         }
-        
-        return $relations;
     }
     
     /**
-     * Возвращает рекомендацию по удалению на основе связей
+     * Создает реквизиты компании
      */
-    private static function getDeleteSuggestion($relations)
+    public static function createRequisites($companyId, $requisites)
     {
-        $suggestions = [];
+        self::log("=== Создание реквизитов для компании ID: {$companyId} ===");
+        self::log("Реквизиты: " . print_r($requisites, true));
         
-        if ($relations['contacts'] > 0) {
-            $suggestions[] = "Компания связана с {$relations['contacts']} контактами. Отвяжите контакты перед удалением.";
-        }
-        
-        if ($relations['deals'] > 0) {
-            $suggestions[] = "Компания связана с {$relations['deals']} сделками. Отвяжите или завершите сделки перед удалением.";
-        }
-        
-        if (empty($suggestions)) {
-            $suggestions[] = "Проверьте права доступа на удаление компаний в CRM.";
-        }
-        
-        return implode(' ', $suggestions);
-    }
-    
-/**
- * Создает реквизиты компании
- */
-public static function createRequisites($companyId, $requisites)
-{
-    self::log("Создание реквизитов для компании ID: " . $companyId);
-    self::log("Реквизиты: " . print_r($requisites, true));
-    
-    try {
-        // Подключаем необходимые модули
-        if (!\Bitrix\Main\Loader::includeModule('crm')) {
-            throw new \Exception('CRM module not loaded');
-        }
-        
-        // Получаем существующие реквизиты компании
-        $requisite = new \Bitrix\Crm\EntityRequisite();
-        $rs = $requisite->getList([
-            "filter" => ["ENTITY_ID" => $companyId, "ENTITY_TYPE_ID" => \CCrmOwnerType::Company]
-        ]);
-        $reqData = $rs->fetchAll();
-        
-        self::log("Найдено существующих реквизитов: " . count($reqData));
-        
-        // Если реквизиты существуют, удаляем их
-        if (!empty($reqData)) {
-            self::log("Удаляем существующие реквизиты");
-            $requisite->deleteByEntity(\CCrmOwnerType::Company, $companyId);
-        }
-        
-        // Подготавливаем данные для реквизитов
-        $fields = [
-            'ENTITY_ID' => $companyId,
-            'ENTITY_TYPE_ID' => \CCrmOwnerType::Company,
-            'PRESET_ID' => !empty($reqData[0]['PRESET_ID']) ? $reqData[0]['PRESET_ID'] : 1,
-            'NAME' => !empty($reqData[0]['NAME']) ? $reqData[0]['NAME'] : 'Реквизиты компании',
-            'SORT' => 500,
-            'ACTIVE' => 'Y'
-        ];
-        
-        // Добавляем поля реквизитов
-        if (!empty($requisites['INN'])) {
-            $fields['RQ_INN'] = $requisites['INN'];
-        }
-        
-        if (!empty($requisites['KPP'])) {
-            $fields['RQ_KPP'] = $requisites['KPP'];
-        }
-        
-        if (!empty($requisites['OGRN'])) {
-            $fields['RQ_OGRN'] = $requisites['OGRN'];
-        }
-        
-        if (!empty($requisites['ADDRESS'])) {
-            $fields['RQ_ADDR'] = $requisites['ADDRESS'];
-        }
-        
-        if (!empty($requisites['PHONE'])) {
-            $fields['RQ_PHONE'] = $requisites['PHONE'];
-        }
-        
-        if (!empty($requisites['EMAIL'])) {
-            $fields['RQ_EMAIL'] = $requisites['EMAIL'];
-        }
-        
-        if (!empty($requisites['CONTACT_PERSON'])) {
-            $fields['RQ_CONTACT'] = $requisites['CONTACT_PERSON'];
-        }
-        
-        if (!empty($requisites['RESPONSIBLE_PERSON'])) {
-            $fields['RQ_DIRECTOR'] = $requisites['RESPONSIBLE_PERSON'];
-        }
-        
-        if (!empty($requisites['COMMENT'])) {
-            $fields['COMMENTS'] = $requisites['COMMENT'];
-        }
-        
-        self::log("Поля реквизитов для создания: " . print_r($fields, true));
-        
-        // Создаем новые реквизиты
-        $result = $requisite->add($fields);
-        
-        if ($result) {
-            // Получаем ID из результата
-            $requisiteId = is_object($result) ? $result->getId() : $result;
-            self::log("Реквизиты успешно созданы, ID: " . $requisiteId);
-            return [
-                'success' => true,
-                'message' => 'Реквизиты успешно созданы',
-                'requisiteId' => $requisiteId
+        try {
+            if (!\Bitrix\Main\Loader::includeModule('crm')) {
+                throw new \Exception('CRM module not loaded');
+            }
+            
+            $requisite = new \Bitrix\Crm\EntityRequisite();
+            
+            // Получаем существующие реквизиты компании
+            $rs = $requisite->getList([
+                "filter" => ["ENTITY_ID" => $companyId, "ENTITY_TYPE_ID" => \CCrmOwnerType::Company]
+            ]);
+            $reqData = $rs->fetchAll();
+            
+            self::log("Найдено существующих реквизитов: " . count($reqData));
+            
+            // Если реквизиты существуют, удаляем их
+            if (!empty($reqData)) {
+                self::log("Удаляем существующие реквизиты");
+                $requisite->deleteByEntity(\CCrmOwnerType::Company, $companyId);
+            }
+            
+            // Подготавливаем данные для реквизитов
+            $fields = [
+                'ENTITY_ID' => $companyId,
+                'ENTITY_TYPE_ID' => \CCrmOwnerType::Company,
+                'PRESET_ID' => !empty($reqData[0]['PRESET_ID']) ? $reqData[0]['PRESET_ID'] : 1,
+                'NAME' => $requisites['NAME'] ?? 'Реквизиты компании',
+                'SORT' => 500,
+                'ACTIVE' => 'Y'
             ];
-        } else {
-            self::log("Ошибка создания реквизитов");
+            
+            // Добавляем поля реквизитов
+            $requisiteFields = [
+                'INN' => 'RQ_INN',
+                'KPP' => 'RQ_KPP',
+                'OGRN' => 'RQ_OGRN',
+                'ADDRESS' => 'RQ_ADDR',
+                'PHONE' => 'RQ_PHONE',
+                'EMAIL' => 'RQ_EMAIL',
+                'CONTACT_PERSON' => 'RQ_CONTACT',
+                'RESPONSIBLE_PERSON' => 'RQ_DIRECTOR',
+                'COMMENT' => 'COMMENTS'
+            ];
+            
+            foreach ($requisiteFields as $key => $fieldName) {
+                if (!empty($requisites[$key])) {
+                    $fields[$fieldName] = $requisites[$key];
+                }
+            }
+            
+            self::log("Поля реквизитов для создания: " . print_r($fields, true));
+            
+            // Создаем новые реквизиты
+            $result = $requisite->add($fields);
+            
+            if ($result) {
+                $requisiteId = is_object($result) ? $result->getId() : $result;
+                self::log("Реквизиты успешно созданы, ID: " . $requisiteId);
+                return [
+                    'success' => true,
+                    'message' => 'Реквизиты успешно созданы',
+                    'requisiteId' => $requisiteId
+                ];
+            } else {
+                self::log("Ошибка создания реквизитов");
+                return [
+                    'success' => false,
+                    'message' => 'Ошибка создания реквизитов'
+                ];
+            }
+            
+        } catch (\Exception $e) {
+            self::log("Исключение при создании реквизитов: " . $e->getMessage());
             return [
                 'success' => false,
-                'message' => 'Ошибка создания реквизитов'
+                'message' => 'Исключение: ' . $e->getMessage()
             ];
         }
-        
-    } catch (\Exception $e) {
-        self::log("Исключение при создании реквизитов: " . $e->getMessage());
-        return [
-            'success' => false,
-            'message' => 'Исключение при создании реквизитов: ' . $e->getMessage()
-        ];
-    }
-}
-    private static function companyHasPhoneValue($phoneResult, $phone)
-    {
-        $normalizedSearchPhone = self::normalizePhone($phone);
-        self::log("Поиск телефона: " . $phone . " (нормализованный: " . $normalizedSearchPhone . ")");
-        
-        while ($phoneData = $phoneResult->Fetch()) {
-            $normalizedCompanyPhone = self::normalizePhone($phoneData['VALUE']);
-            self::log("Сравнение с: " . $phoneData['VALUE'] . " (нормализованный: " . $normalizedCompanyPhone . ")");
-            if ($normalizedCompanyPhone === $normalizedSearchPhone) {
-                self::log("Телефон найден в компании");
-                return true;
-            }
-        }
-        
-        self::log("Телефон не найден в компании");
-        return false;
-    }
-    
-    private static function companyHasEmailValue($emailResult, $email)
-    {
-        $normalizedSearchEmail = strtolower(trim($email));
-        self::log("Поиск email: " . $email . " (нормализованный: " . $normalizedSearchEmail . ")");
-        
-        while ($emailData = $emailResult->Fetch()) {
-            $normalizedCompanyEmail = strtolower(trim($emailData['VALUE']));
-            self::log("Сравнение с: " . $emailData['VALUE'] . " (нормализованный: " . $normalizedCompanyEmail . ")");
-            if ($normalizedCompanyEmail === $normalizedSearchEmail) {
-                self::log("Email найден в компании");
-                return true;
-            }
-        }
-        
-        self::log("Email не найден в компании");
-        return false;
     }
 
+    /**
+     * Поиск компании по ИНН
+     */
+    private static function findCompanyByINN($inn)
+    {
+        if (empty($inn)) {
+            return null;
+        }
+        
+        self::log("Поиск компании по ИНН: " . $inn);
+        
+        try {
+            $filter = ['UF_CRM_INN' => $inn];
+            
+            $res = CCrmCompany::GetListEx(
+                [],
+                $filter,
+                false,
+                ['nTopCount' => 1],
+                ['ID']
+            );
+            
+            if ($company = $res->Fetch()) {
+                self::log("Компания найдена по ИНН, ID: " . $company['ID']);
+                return $company['ID'];
+            }
+            
+        } catch (\Exception $e) {
+            self::log("Ошибка поиска компании по ИНН: " . $e->getMessage());
+        }
+        
+        self::log("Компания по ИНН не найдена");
+        return null;
+    }
+
+    /**
+     * Поиск компании по телефону
+     */
     private static function findCompanyByPhone($phone)
     {
         if (empty($phone)) {
-            self::log("Пустой телефон для поиска");
             return null;
         }
 
         self::log("Поиск компании по телефону: " . $phone);
-        // Генерируем все возможные варианты формата телефона
         $phoneVariations = self::getPhoneVariations($phone);
-        self::log("Варианты телефона для поиска: " . print_r($phoneVariations, true));
         
-        // Ищем по каждому варианту
         foreach ($phoneVariations as $phoneVariation) {
             try {
-                self::log("Поиск по варианту: " . $phoneVariation);
-                // Ищем через мультиполя
                 $result = CCrmFieldMulti::GetList(
                     ['ID' => 'asc'],
                     [
@@ -537,16 +508,18 @@ public static function createRequisites($companyId, $requisites)
         return null;
     }
 
+    /**
+     * Поиск компании по email
+     */
     private static function findCompanyByEmail($email)
     {
         if (empty($email)) {
-            self::log("Пустой email для поиска");
             return null;
         }
         
         self::log("Поиск компании по email: " . $email);
+        
         try {
-            // Ищем через мультиполя
             $result = CCrmFieldMulti::GetList(
                 ['ID' => 'asc'],
                 [
@@ -570,62 +543,47 @@ public static function createRequisites($companyId, $requisites)
     }
 
     /**
-     * Генерирует все возможные варианты форматирования телефона
+     * Генерирует варианты форматирования телефона
      */
     private static function getPhoneVariations($phone)
     {
-        self::log("Генерация вариантов телефона: " . $phone);
         $normalizedPhone = self::normalizePhone($phone);
-        self::log("Нормализованный телефон: " . $normalizedPhone);
         
         if (empty($normalizedPhone) || strlen($normalizedPhone) !== 11) {
-            self::log("Некорректная длина телефона, возвращаем исходный");
             return [$phone];
         }
         
         $variations = [];
         
-        // +7 XXX XXX-XX-XX
         $variations[] = '+' . $normalizedPhone[0] . ' ' . 
                        substr($normalizedPhone, 1, 3) . ' ' . 
                        substr($normalizedPhone, 4, 3) . '-' . 
                        substr($normalizedPhone, 7, 2) . '-' . 
                        substr($normalizedPhone, 9, 2);
         
-        // 8 XXX XXX-XX-XX
         $variations[] = '8 ' . 
                        substr($normalizedPhone, 1, 3) . ' ' . 
                        substr($normalizedPhone, 4, 3) . '-' . 
                        substr($normalizedPhone, 7, 2) . '-' . 
                        substr($normalizedPhone, 9, 2);
         
-        // +7XXXXXXXXXX
         $variations[] = '+' . $normalizedPhone;
-        
-        // 7XXXXXXXXXX
         $variations[] = $normalizedPhone;
-        
-        // 8XXXXXXXXXX
         $variations[] = '8' . substr($normalizedPhone, 1);
         
-        // +7(XXX)XXX-XX-XX
         $variations[] = '+' . $normalizedPhone[0] . '(' . 
                        substr($normalizedPhone, 1, 3) . ')' . 
                        substr($normalizedPhone, 4, 3) . '-' . 
                        substr($normalizedPhone, 7, 2) . '-' . 
                        substr($normalizedPhone, 9, 2);
         
-        // Исходный формат
         $variations[] = $phone;
         
-        // Убираем дубликаты
-        $uniqueVariations = array_unique($variations);
-        self::log("Сгенерированные варианты: " . print_r($uniqueVariations, true));
-        return $uniqueVariations;
+        return array_unique($variations);
     }
 
     /**
-     * Нормализует номер телефона для сравнения
+     * Нормализует номер телефона
      */
     private static function normalizePhone($phone)
     {
@@ -633,12 +591,8 @@ public static function createRequisites($companyId, $requisites)
             return '';
         }
         
-        self::log("Нормализация телефона: " . $phone);
-        // Убираем все кроме цифр
         $cleanPhone = preg_replace('/[^\d]/', '', $phone);
-        self::log("Очищенный телефон: " . $cleanPhone);
         
-        // Обрабатываем российские номера
         if (strlen($cleanPhone) === 11) {
             if ($cleanPhone[0] === '8') {
                 $cleanPhone = '7' . substr($cleanPhone, 1);
@@ -647,7 +601,6 @@ public static function createRequisites($companyId, $requisites)
             $cleanPhone = '7' . $cleanPhone;
         }
         
-        self::log("Нормализованный телефон: " . $cleanPhone);
         return $cleanPhone;
     }
 }

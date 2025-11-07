@@ -50,16 +50,16 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
 
             // 3. Получение данных всех контактов
             $contacts = [];
-            foreach ($contactIds as $contactId) {
-                $contactData = $this->GetContactData($contactId);
-                if ($contactData) {
-                    $contacts[] = $contactData;
+            if (!empty($contactIds)) {
+                foreach ($contactIds as $contactId) {
+                    $contactData = $this->GetContactData($contactId);
+                    if ($contactData) {
+                        $contacts[] = $contactData;
+                    }
                 }
-            }
-            $this->WriteToTrackingService("Контакты для отправки: " . print_r($contacts, true));
-            if (empty($contacts)) {
-                $this->WriteToTrackingService("Не удалось получить данные контактов");
-                return CBPActivityExecutionStatus::Closed;
+                $this->WriteToTrackingService("Контакты для отправки: " . print_r($contacts, true));
+            } else {
+                $this->WriteToTrackingService("Контакты не указаны, отправляем только данные компании");
             }
 
             // 4. Формирование данных для отправки

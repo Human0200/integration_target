@@ -1,4 +1,5 @@
 <?php
+
 namespace LeadSpace\Classes\Contacts;
 
 use Bitrix\Crm\ContactTable;
@@ -7,10 +8,24 @@ use Bitrix\Main\Entity\ExpressionField;
 
 class FindContact
 {
+    private static function writeLog($message)
+    {
+        $logFile = $_SERVER['DOCUMENT_ROOT'] . '/local/logs/contact_debug.log';
+        $logDir = dirname($logFile);
 
-    
+        if (!is_dir($logDir)) {
+            mkdir($logDir, 0755, true);
+        }
+
+        $timestamp = date('Y-m-d H:i:s');
+        file_put_contents($logFile, "[{$timestamp}] {$message}\n", FILE_APPEND);
+    }
+
     public static function findOrCreateContact($properties)
     {
+        self::writeLog('=== findOrCreateContact called ===');
+        self::writeLog('Properties: ' . print_r($properties, true));
+
         $phone = $properties['PHONE'] ?? null;
         $email = $properties['EMAIL'] ?? null;
         $name = $properties['NAME'] ?? $properties['FIO'] ?? 'Клиент из интернет-магазина';
@@ -18,7 +33,10 @@ class FindContact
 
         $companyId = $properties['COMPANY_ID'] ?? null;
 
+        self::writeLog("Parsed data - Phone: {$phone}, Email: {$email}, Name: {$name}, CompanyId: {$companyId}");
+
         if (!$phone && !$email) {
+            self::writeLog('No phone and no email provided - returning null');
             return null;
         }
 
@@ -27,14 +45,19 @@ class FindContact
 
         if ($phone) {
             $contactId = self::findContactByPhone($phone, $companyId);
+            self::writeLog("Search by phone result: " . ($contactId ? $contactId : 'not found'));
         }
 
         if (!$contactId && $email) {
             $contactId = self::findContactByEmail($email, $companyId);
+            self::writeLog("Search by email result: " . ($contactId ? $contactId : 'not found'));
         }
 
         // Если контакт не найден - создаем новый
         if (!$contactId) {
+            self::writeLog('Contact not found, creating new one');
+
+            // ИСПРАВЛЕНИЕ: Создаем контакт БЕЗ мультиполей
             $contactFields = [
                 'NAME' => $name,
                 'LAST_NAME' => $lastName,
@@ -45,187 +68,336 @@ class FindContact
                 $contactFields['COMPANY_ID'] = $companyId;
             }
 
-            if ($phone) {
-                $contactFields['PHONE'] = [['VALUE' => $phone, 'VALUE_TYPE' => 'WORK']];
-            }
-
-            if ($email) {
-                $contactFields['EMAIL'] = [['VALUE' => $email, 'VALUE_TYPE' => 'WORK']];
-            }
+            self::writeLog('Contact fields to create: ' . print_r($contactFields, true));
 
             $createResult = self::createContact($contactFields);
-            
-            if ($createResult->isSuccess()) {
+
+            self::writeLog('Create result type: ' . gettype($createResult));
+
+            // Проверяем не null ли результат
+            if ($createResult && is_object($createResult) && method_exists($createResult, 'isSuccess') && $createResult->isSuccess()) {
                 $contactId = $createResult->getId();
+                self::writeLog("Contact successfully created with ID: {$contactId}");
+
+                // ИСПРАВЛЕНИЕ: Теперь добавляем телефон и email через CCrmFieldMulti
+                if ($phone || $email) {
+                    self::addContactMultiFields($contactId, $phone, $email);
+                }
+            } else {
+                // Логируем ошибку если есть
+                if ($createResult && is_object($createResult) && method_exists($createResult, 'getErrorMessages')) {
+                    $errors = $createResult->getErrorMessages();
+                    self::writeLog('Error creating contact: ' . implode(', ', $errors));
+                } else {
+                    self::writeLog('Error creating contact: createContact returned invalid result - ' . print_r($createResult, true));
+                }
+                return null;
             }
         } else {
+            self::writeLog("Contact found with ID: {$contactId}, updating...");
             // Если контакт найден, обновляем его данные
             self::updateContact($contactId, $name, $lastName, $phone, $email);
         }
 
+        self::writeLog("Returning contact ID: {$contactId}");
+        self::writeLog('=== End findOrCreateContact ===');
         return $contactId;
     }
-    
+
+    /**
+     * Добавляет телефон и email к контакту
+     */
+    private static function addContactMultiFields($contactId, $phone, $email)
+    {
+        try {
+            $fieldMulti = new \CCrmFieldMulti();
+            $fields = [];
+
+            if ($phone) {
+                $fields['PHONE'] = [
+                    'n0' => [
+                        'VALUE' => $phone,
+                        'VALUE_TYPE' => 'WORK'
+                    ]
+                ];
+                self::writeLog("Adding phone {$phone} to contact {$contactId}");
+            }
+
+            if ($email) {
+                $fields['EMAIL'] = [
+                    'n0' => [
+                        'VALUE' => $email,
+                        'VALUE_TYPE' => 'WORK'
+                    ]
+                ];
+                self::writeLog("Adding email {$email} to contact {$contactId}");
+            }
+
+            if (!empty($fields)) {
+                $result = $fieldMulti->SetFields('CONTACT', $contactId, $fields);
+                self::writeLog("SetFields result: " . ($result ? 'success' : 'failed'));
+            }
+        } catch (\Exception $e) {
+            self::writeLog('Exception in addContactMultiFields: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Создает новый контакт через D7 ORM
+     */
     /**
      * Создает новый контакт через D7 ORM
      */
     private static function createContact($fields)
     {
         try {
-            return ContactTable::add($fields);
+            // Добавляем обязательные поля
+            if (!isset($fields['ASSIGNED_BY_ID'])) {
+                $fields['ASSIGNED_BY_ID'] = 1; // Ответственный
+            }
+
+            if (!isset($fields['MODIFY_BY_ID'])) {
+                $fields['MODIFY_BY_ID'] = 1; // Кем обновлён
+            }
+
+            if (!isset($fields['CREATED_BY_ID'])) {
+                $fields['CREATED_BY_ID'] = 1; // Кем создан
+            }
+
+            self::writeLog('Attempting to create contact with ContactTable::add()');
+            self::writeLog('Fields with required IDs: ' . print_r($fields, true));
+
+            $result = ContactTable::add($fields);
+            self::writeLog('ContactTable::add() completed');
+
+            if ($result && is_object($result)) {
+                self::writeLog('Result is valid object');
+                if (method_exists($result, 'isSuccess')) {
+                    self::writeLog('isSuccess method exists, result: ' . ($result->isSuccess() ? 'true' : 'false'));
+                    if (!$result->isSuccess() && method_exists($result, 'getErrorMessages')) {
+                        self::writeLog('Errors: ' . implode(', ', $result->getErrorMessages()));
+                    }
+                }
+            }
+
+            return $result;
         } catch (\Exception $e) {
-            error_log('Error creating contact: ' . $e->getMessage());
-            return null;
+            self::writeLog('Exception in createContact: ' . $e->getMessage());
+            self::writeLog('Exception trace: ' . $e->getTraceAsString());
+            return false;
         }
     }
-    
+
     /**
      * Получает данные контакта по ID
      */
     private static function getContact($contactId)
     {
         try {
-            return ContactTable::getByPrimary($contactId, [
-                'select' => ['ID', 'NAME', 'LAST_NAME', 'PHONE', 'EMAIL', 'COMPANY_ID']
+            $result = ContactTable::getByPrimary($contactId, [
+                'select' => ['ID', 'NAME', 'LAST_NAME', 'COMPANY_ID']
             ]);
+
+            if ($result && $result->fetch()) {
+                return $result;
+            }
+            return null;
         } catch (\Exception $e) {
-            error_log('Error getting contact: ' . $e->getMessage());
+            self::writeLog('Error getting contact: ' . $e->getMessage());
             return null;
         }
     }
-    
+
     private static function updateContact($contactId, $name, $lastName, $phone, $email)
     {
         $updateFields = [
             'NAME' => $name,
             'LAST_NAME' => $lastName,
         ];
-        
-        // Получаем текущие данные контакта
-        $currentContactResult = self::getContact($contactId);
-        
-        if ($currentContactResult && $currentContactResult->isSuccess()) {
-            $currentContact = $currentContactResult->fetchAll()[0];
-            
-            // Проверяем и добавляем телефон, если его еще нет
-            if ($phone && !self::contactHasPhone($currentContact, $phone)) {
-                $phones = $currentContact['PHONE'] ?? [];
-                $phones[] = ['VALUE' => $phone, 'VALUE_TYPE' => 'WORK'];
-                $updateFields['PHONE'] = $phones;
+
+        // Создаем объект для работы с мультиполями
+        $fieldMulti = new \CCrmFieldMulti();
+
+        // Мультиполя (телефоны и email) нужно обновлять через CCrmFieldMulti
+        if ($phone) {
+            $existingPhones = \CCrmFieldMulti::GetEntityFields('CONTACT', $contactId, 'PHONE', false);
+            $phoneExists = false;
+
+            if (!empty($existingPhones)) {
+                $normalizedPhone = self::normalizePhone($phone);
+                foreach ($existingPhones as $existingPhone) {
+                    if (self::normalizePhone($existingPhone['VALUE']) === $normalizedPhone) {
+                        $phoneExists = true;
+                        break;
+                    }
+                }
             }
 
-            // Проверяем и добавляем email, если его еще нет
-            if ($email && !self::contactHasEmail($currentContact, $email)) {
-                $emails = $currentContact['EMAIL'] ?? [];
-                $emails[] = ['VALUE' => $email, 'VALUE_TYPE' => 'WORK'];
-                $updateFields['EMAIL'] = $emails;
+            if (!$phoneExists) {
+                $fieldMulti->SetFields('CONTACT', $contactId, [
+                    'PHONE' => [
+                        'n0' => [
+                            'VALUE' => $phone,
+                            'VALUE_TYPE' => 'WORK'
+                        ]
+                    ]
+                ]);
+                self::writeLog("Added phone {$phone} to contact {$contactId}");
             }
         }
-        
-        // Обновляем контакт
+
+        if ($email) {
+            $existingEmails = \CCrmFieldMulti::GetEntityFields('CONTACT', $contactId, 'EMAIL', false);
+            $emailExists = false;
+
+            if (!empty($existingEmails)) {
+                $normalizedEmail = strtolower(trim($email));
+                foreach ($existingEmails as $existingEmail) {
+                    if (strtolower(trim($existingEmail['VALUE'])) === $normalizedEmail) {
+                        $emailExists = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!$emailExists) {
+                $fieldMulti->SetFields('CONTACT', $contactId, [
+                    'EMAIL' => [
+                        'n0' => [
+                            'VALUE' => $email,
+                            'VALUE_TYPE' => 'WORK'
+                        ]
+                    ]
+                ]);
+                self::writeLog("Added email {$email} to contact {$contactId}");
+            }
+        }
+
+        // Обновляем основные поля
         try {
-            ContactTable::update($contactId, $updateFields);
+            $result = ContactTable::update($contactId, $updateFields);
+            if (!$result->isSuccess()) {
+                $errors = $result->getErrorMessages();
+                self::writeLog('Error updating contact: ' . implode(', ', $errors));
+            }
         } catch (\Exception $e) {
-            error_log('Error updating contact: ' . $e->getMessage());
+            self::writeLog('Exception in updateContact: ' . $e->getMessage());
         }
     }
-    
-    private static function contactHasPhone($contact, $phone)
-    {
-        if (empty($contact['PHONE'])) {
-            return false;
-        }
-        
-        $normalizedSearchPhone = self::normalizePhone($phone);
-        
-        foreach ($contact['PHONE'] as $phoneData) {
-            $normalizedContactPhone = self::normalizePhone($phoneData['VALUE']);
-            if ($normalizedContactPhone === $normalizedSearchPhone) {
-                return true;
-            }
-        }
-        
-        return false;
-    }
-    
-    private static function contactHasEmail($contact, $email)
-    {
-        if (empty($contact['EMAIL'])) {
-            return false;
-        }
-        
-        $normalizedSearchEmail = strtolower(trim($email));
-        
-        foreach ($contact['EMAIL'] as $emailData) {
-            $normalizedContactEmail = strtolower(trim($emailData['VALUE']));
-            if ($normalizedContactEmail === $normalizedSearchEmail) {
-                return true;
-            }
-        }
-        
-        return false;
-    }
-    
+
     /**
      * Обновляет поля контакта
      */
-    public static function updateContactFields($contactId, $fields)
-    {
-        try {
-            $updateResult = ContactTable::update($contactId, $fields);
-            return $updateResult->isSuccess() ? $contactId : false;
-        } catch (\Exception $e) {
-            error_log('Error updating contact fields: ' . $e->getMessage());
+public static function updateContactFields($contactId, $fields)
+{
+    try {
+        writeHandlerLog('Attempting to update contact ' . $contactId . ' with fields: ' . print_r($fields, true));
+        
+        // Проверяем существование контакта
+        $contact = ContactTable::getById($contactId)->fetch();
+        if (!$contact) {
+            writeHandlerLog('Contact not found: ' . $contactId);
             return false;
         }
+        
+        writeHandlerLog('Contact found, updating...');
+        
+        // Разделяем обычные поля и мультиполя (EMAIL, PHONE)
+        $regularFields = [];
+        $multiFields = [];
+        
+        foreach ($fields as $key => $value) {
+            if ($key === 'EMAIL' || $key === 'PHONE') {
+                $multiFields[$key] = $value;
+            } else {
+                $regularFields[$key] = $value;
+            }
+        }
+        
+        // Обновляем обычные поля
+        if (!empty($regularFields)) {
+            $updateResult = ContactTable::update($contactId, $regularFields);
+            if (!$updateResult->isSuccess()) {
+                $errors = $updateResult->getErrorMessages();
+                writeHandlerLog('Update failed for regular fields: ' . print_r($errors, true));
+                return false;
+            }
+        }
+        
+        // Обновляем мультиполя (EMAIL, PHONE)
+        if (!empty($multiFields)) {
+            $contactEntity = new \CCrmContact(false);
+            $multiUpdateFields = ['FM' => []];
+            
+            foreach ($multiFields as $fieldType => $fieldValue) {
+                if (!empty($fieldValue)) {
+                    $multiUpdateFields['FM'][$fieldType] = [
+                        'n0' => [
+                            'VALUE' => $fieldValue,
+                            'VALUE_TYPE' => 'WORK'
+                        ]
+                    ];
+                }
+            }
+            
+            writeHandlerLog('Updating multi fields: ' . print_r($multiUpdateFields, true));
+            $multiResult = $contactEntity->Update($contactId, $multiUpdateFields);
+            if (!$multiResult) {
+                writeHandlerLog('Failed to update multi fields: ' . $contactEntity->LAST_ERROR);
+                return false;
+            }
+        }
+        
+        writeHandlerLog('Contact updated successfully: ' . $contactId);
+        return $contactId;
+        
+    } catch (\Exception $e) {
+        writeHandlerLog('Exception in updateContactFields for contact ' . $contactId . ': ' . $e->getMessage());
+        writeHandlerLog('Stack trace: ' . $e->getTraceAsString());
+        return false;
     }
-    
+}
+
     /**
      * Создает адрес (заглушка для будущего функционала)
      */
     public static function createAddress($requisites)
     {
-        // TODO: Реализовать создание адреса
         return ['success' => true, 'message' => 'Address creation not implemented yet'];
     }
-    
+
     /**
      * Удаляет контакт по ID
-     * @param int $contactId ID контакта для удаления
-     * @return bool true если удаление успешно, false в противном случае
      */
     public static function deleteContact($contactId)
     {
         if (empty($contactId)) {
-            error_log('DeleteContact: Contact ID is empty');
+            self::writeLog('DeleteContact: Contact ID is empty');
             return false;
         }
-        
+
         try {
-            // Проверяем существование контакта
             $contactResult = ContactTable::getByPrimary($contactId, [
                 'select' => ['ID']
             ]);
-            
+
             if (!$contactResult->fetch()) {
-                error_log("DeleteContact: Contact with ID {$contactId} not found");
+                self::writeLog("DeleteContact: Contact with ID {$contactId} not found");
                 return false;
             }
-            
-            // Удаляем контакт
+
             $deleteResult = ContactTable::delete($contactId);
-            
+
             if ($deleteResult->isSuccess()) {
-                error_log("DeleteContact: Contact {$contactId} successfully deleted");
+                self::writeLog("DeleteContact: Contact {$contactId} successfully deleted");
                 return true;
             } else {
                 $errors = $deleteResult->getErrorMessages();
-                error_log("DeleteContact: Failed to delete contact {$contactId}. Errors: " . implode(', ', $errors));
+                self::writeLog("DeleteContact: Failed to delete contact {$contactId}. Errors: " . implode(', ', $errors));
                 return false;
             }
-            
         } catch (\Exception $e) {
-            error_log('DeleteContact: Exception - ' . $e->getMessage());
+            self::writeLog('DeleteContact: Exception - ' . $e->getMessage());
             return false;
         }
     }
@@ -236,99 +408,41 @@ class FindContact
             return null;
         }
 
-        // Генерируем все возможные варианты формата телефона
-        $phoneVariations = self::getPhoneVariations($phone);
-        
-        // Ищем по каждому варианту
-        foreach ($phoneVariations as $phoneVariation) {
-            try {
-                $query = ContactTable::query()
-                    ->setSelect(['ID', 'COMPANY_ID'])
-                    ->where('PHONE', $phoneVariation);
-                
-                // Добавляем фильтр по COMPANY_ID если он задан
-                if ($companyId) {
-                    $query->where('COMPANY_ID', $companyId);
-                } else {
-                    // Ищем только контакты с заполненным COMPANY_ID
-                    $query->where('COMPANY_ID', '>', 0);
-                }
-                
-                $result = $query->exec();
-                
-                if ($contact = $result->fetch()) {
-                    return $contact['ID'];
-                }
-            } catch (\Exception $e) {
-                error_log('Error finding contact by phone: ' . $e->getMessage());
+        self::writeLog("Searching contact by phone: {$phone}, companyId: " . ($companyId ?? 'null'));
+
+        // Используем старый API для поиска по мультиполям
+        $filter = ['PHONE' => $phone];
+
+        if ($companyId) {
+            $filter['COMPANY_ID'] = $companyId;
+        }
+
+        $res = \CCrmContact::GetListEx(
+            [],
+            $filter,
+            false,
+            ['nTopCount' => 1],
+            ['ID', 'COMPANY_ID']
+        );
+
+        if ($contact = $res->Fetch()) {
+            self::writeLog("Found contact by phone: ID={$contact['ID']}, COMPANY_ID={$contact['COMPANY_ID']}");
+
+            // Если указан companyId, проверяем совпадение
+            if ($companyId && $contact['COMPANY_ID'] != $companyId) {
+                self::writeLog("Company ID mismatch, skipping");
+                return null;
             }
+            // Если companyId не указан, проверяем что у контакта есть компания
+            if (!$companyId && empty($contact['COMPANY_ID'])) {
+                self::writeLog("Contact has no company, skipping");
+                return null;
+            }
+            return $contact['ID'];
         }
 
+        self::writeLog("No contact found by phone");
         return null;
-    }
-
-    /**
-     * Генерирует все возможные варианты форматирования телефона
-     */
-    private static function getPhoneVariations($phone)
-    {
-        $normalizedPhone = self::normalizePhone($phone);
-        
-        if (empty($normalizedPhone) || strlen($normalizedPhone) !== 11) {
-            return [$phone]; // Возвращаем исходный, если не удалось нормализовать
-        }
-        
-        $variations = [];
-        
-        // +7 XXX XXX-XX-XX
-        $variations[] = '+' . $normalizedPhone[0] . ' ' . 
-                       substr($normalizedPhone, 1, 3) . ' ' . 
-                       substr($normalizedPhone, 4, 3) . '-' . 
-                       substr($normalizedPhone, 7, 2) . '-' . 
-                       substr($normalizedPhone, 9, 2);
-        
-        // 7 XXX XXX-XX-XX
-        $variations[] = $normalizedPhone[0] . ' ' . 
-                       substr($normalizedPhone, 1, 3) . ' ' . 
-                       substr($normalizedPhone, 4, 3) . '-' . 
-                       substr($normalizedPhone, 7, 2) . '-' . 
-                       substr($normalizedPhone, 9, 2);
-        
-        // 8 XXX XXX-XX-XX
-        $variations[] = '8 ' . 
-                       substr($normalizedPhone, 1, 3) . ' ' . 
-                       substr($normalizedPhone, 4, 3) . '-' . 
-                       substr($normalizedPhone, 7, 2) . '-' . 
-                       substr($normalizedPhone, 9, 2);
-        
-        // +7XXXXXXXXXX
-        $variations[] = '+' . $normalizedPhone;
-        
-        // 7XXXXXXXXXX
-        $variations[] = $normalizedPhone;
-        
-        // 8XXXXXXXXXX
-        $variations[] = '8' . substr($normalizedPhone, 1);
-        
-        // +7(XXX)XXX-XX-XX
-        $variations[] = '+' . $normalizedPhone[0] . '(' . 
-                       substr($normalizedPhone, 1, 3) . ')' . 
-                       substr($normalizedPhone, 4, 3) . '-' . 
-                       substr($normalizedPhone, 7, 2) . '-' . 
-                       substr($normalizedPhone, 9, 2);
-        
-        // 7(XXX)XXX-XX-XX
-        $variations[] = $normalizedPhone[0] . '(' . 
-                       substr($normalizedPhone, 1, 3) . ')' . 
-                       substr($normalizedPhone, 4, 3) . '-' . 
-                       substr($normalizedPhone, 7, 2) . '-' . 
-                       substr($normalizedPhone, 9, 2);
-        
-        // Исходный формат тоже добавляем
-        $variations[] = $phone;
-        
-        // Убираем дубликаты
-        return array_unique($variations);
     }
 
     /**
@@ -339,11 +453,9 @@ class FindContact
         if (empty($phone)) {
             return '';
         }
-        
-        // Убираем все кроме цифр
+
         $cleanPhone = preg_replace('/[^\d]/', '', $phone);
-        
-        // Обрабатываем российские номера
+
         if (strlen($cleanPhone) === 11) {
             if ($cleanPhone[0] === '8') {
                 $cleanPhone = '7' . substr($cleanPhone, 1);
@@ -351,7 +463,7 @@ class FindContact
         } elseif (strlen($cleanPhone) === 10) {
             $cleanPhone = '7' . $cleanPhone;
         }
-        
+
         return $cleanPhone;
     }
 
@@ -360,29 +472,41 @@ class FindContact
         if (empty($email)) {
             return null;
         }
-        
-        try {
-            $query = ContactTable::query()
-                ->setSelect(['ID', 'COMPANY_ID'])
-                ->where('EMAIL', $email);
-            
-            // Добавляем фильтр по COMPANY_ID если он задан
-            if ($companyId) {
-                $query->where('COMPANY_ID', $companyId);
-            } else {
-                // Ищем только контакты с заполненным COMPANY_ID
-                $query->where('COMPANY_ID', '>', 0);
-            }
-            
-            $result = $query->exec();
-            
-            if ($contact = $result->fetch()) {
-                return $contact['ID'];
-            }
-        } catch (\Exception $e) {
-            error_log('Error finding contact by email: ' . $e->getMessage());
+
+        self::writeLog("Searching contact by email: {$email}, companyId: " . ($companyId ?? 'null'));
+
+        // Используем старый API для поиска по мультиполям
+        $filter = ['EMAIL' => $email];
+
+        if ($companyId) {
+            $filter['COMPANY_ID'] = $companyId;
         }
-        
+
+        $res = \CCrmContact::GetListEx(
+            [],
+            $filter,
+            false,
+            ['nTopCount' => 1],
+            ['ID', 'COMPANY_ID']
+        );
+
+        if ($contact = $res->Fetch()) {
+            self::writeLog("Found contact by email: ID={$contact['ID']}, COMPANY_ID={$contact['COMPANY_ID']}");
+
+            // Если указан companyId, проверяем совпадение
+            if ($companyId && $contact['COMPANY_ID'] != $companyId) {
+                self::writeLog("Company ID mismatch, skipping");
+                return null;
+            }
+            // Если companyId не указан, проверяем что у контакта есть компания
+            if (!$companyId && empty($contact['COMPANY_ID'])) {
+                self::writeLog("Contact has no company, skipping");
+                return null;
+            }
+            return $contact['ID'];
+        }
+
+        self::writeLog("No contact found by email");
         return null;
     }
 }
