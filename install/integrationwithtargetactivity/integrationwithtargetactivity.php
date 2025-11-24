@@ -8,7 +8,17 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
     // Учетные данные для API
     const API_EMAIL = "btx@targetco.ru";
     const API_PASSWORD = "hWP_cj1ZER";
-    
+
+    // Маппинг значений поля UF_CRM_1756716976955 в group
+    const GROUP_MAPPING = [
+        40 => 'NNK',
+        45 => 'Отдел продаж',
+        41 => 'EAEL',
+        42 => 'Целина',
+        43 => 'В работу',
+        44 => 'Сотрудники',
+    ];
+
     public function __construct($name)
     {
         parent::__construct($name);
@@ -23,18 +33,19 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
     public function Execute()
     {
         $this->UserId = "";
+
         // Обработка массива контактов
         $contactIds = $this->ContactId;
         if (!is_array($contactIds)) {
             $contactIds = !empty($contactIds) ? [$contactIds] : [];
         }
-        
+
         $companyId = trim((string)$this->CompanyId);
 
         try {
             // 1. Авторизация и получение токена
             $authToken = $this->Authenticate();
-            
+
             if (!$authToken) {
                 $this->WriteToTrackingService("Ошибка авторизации");
                 return CBPActivityExecutionStatus::Closed;
@@ -42,7 +53,7 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
 
             // 2. Получение данных компании из Битрикс24
             $companyData = $this->GetCompanyData($companyId);
-            
+
             if (!$companyData) {
                 $this->WriteToTrackingService("Не удалось получить данные компании");
                 return CBPActivityExecutionStatus::Closed;
@@ -62,18 +73,19 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
                 $this->WriteToTrackingService("Контакты не указаны, отправляем только данные компании");
             }
 
-            // 4. Формирование данных для отправки
+            // 4. Формирование данных для отправки (сразу с контактами)
             $requestData = $this->PrepareRequestData($contacts, $companyData);
 
-            // 5. Отправка данных в API
-            $result = $this->SendUserData($authToken, $requestData, $companyId);
+            // 5. Отправка данных в API (всегда на /0, API сам разберется по ext_id)
+            $apiUrl = "https://test-api.targetco.ru/api/btx/users/" . ($companyData['ext_id'] ?? '0');
+            $this->WriteToTrackingService("Ссылка API: " . $apiUrl);
+            $result = $this->SendToAPI($authToken, $requestData, $apiUrl);
 
             if ($result) {
-                $this->WriteToTrackingService("Данные успешно отправлены в API");
+                $this->WriteToTrackingService("Данные успешно отправлены в API. ID из внешней системы: " . $this->UserId);
             } else {
                 $this->WriteToTrackingService("Ошибка при отправке данных в API");
             }
-
         } catch (Exception $e) {
             $this->WriteToTrackingService("Ошибка: " . $e->getMessage());
         }
@@ -87,7 +99,7 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
     private function Authenticate()
     {
         $authUrl = "https://test-api.targetco.ru/api/login";
-        
+
         $authData = [
             "email" => self::API_EMAIL,
             "password" => self::API_PASSWORD
@@ -99,10 +111,10 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
                 'streamTimeout' => 30,
                 'waitResponse' => true,
             ]);
-            
+
             $http->setHeader('Content-Type', 'application/json');
             $http->setHeader('Accept', 'application/json');
-            
+
             $response = $http->post($authUrl, json_encode($authData));
             $httpCode = $http->getStatus();
 
@@ -112,14 +124,13 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
             }
 
             $authResult = json_decode($response, true);
-            
+
             if (isset($authResult['token'])) {
                 return $authResult['token'];
             }
 
             $this->WriteToTrackingService("Токен не найден в ответе авторизации");
             return null;
-            
         } catch (Exception $e) {
             $this->WriteToTrackingService("Исключение при авторизации: " . $e->getMessage());
             return null;
@@ -137,25 +148,24 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
 
         try {
             \Bitrix\Main\Loader::includeModule('crm');
-            
+
             $contact = \CCrmContact::GetByID($contactId, false);
-            
+
             if (!$contact) {
                 return null;
             }
-            
+
             $fio = trim(($contact['NAME'] ?? '') . ' ' . ($contact['LAST_NAME'] ?? ''));
             if (empty($fio)) {
                 $fio = $contact['HONORIFIC'] ?? '';
             }
-            
+
             return [
                 'id' => $contactId,
                 'fio' => $fio,
                 'phone' => $this->GetContactPhone($contactId),
                 'email' => $this->GetContactEmail($contactId)
             ];
-            
         } catch (Exception $e) {
             $this->WriteToTrackingService("Ошибка получения контакта ID={$contactId}: " . $e->getMessage());
             return null;
@@ -186,9 +196,6 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
         return '';
     }
 
-    /**
-     * Получение данных компании из Битрикс24
-     */
     private function GetCompanyData($companyId)
     {
         if (empty($companyId)) {
@@ -197,26 +204,118 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
 
         try {
             \Bitrix\Main\Loader::includeModule('crm');
-            
-            $company = \CCrmCompany::GetByID($companyId, false);
-            
+
+            // Получаем основные данные компании
+            $dbResult = \CCrmCompany::GetListEx(
+                [],
+                ['ID' => $companyId, 'CHECK_PERMISSIONS' => 'N'],
+                false,
+                false,
+                ['*', 'UF_*']
+            );
+
+            $company = $dbResult->Fetch();
+
             if (!$company) {
+                $this->WriteToTrackingService("Компания с ID={$companyId} не найдена");
                 return null;
             }
-            
+
+            // Получаем реквизиты компании
+            $requisites = $this->GetCompanyRequisites($companyId);
+
+            // Получаем значение поля UF_CRM_1756716976955 и маппим в group
+            $groupFieldValue = $company['UF_CRM_1756716976955'] ?? null;
+            $group = $this->MapGroupValue($groupFieldValue);
+
             return [
+                'ext_id' => $company['UF_CRM_1760515262922'] ?? null,
+                'id' => $company['ID'] ?? null,
                 'name' => $company['TITLE'] ?? '',
-                'inn' => $company['UF_CRM_INN'] ?? '',
-                'kpp' => $company['UF_CRM_KPP'] ?? '',
+                'inn' => $requisites['inn'] ?? '',
+                'kpp' => $requisites['kpp'] ?? '',
                 'email' => $this->GetCompanyEmail($companyId),
                 'phone' => $this->GetCompanyPhone($companyId),
-                'address' => $company['ADDRESS'] ?? ''
+                'address' => $requisites['address'] ?? ($company['ADDRESS'] ?? ''),
+                'group' => $group,
+                'comment' => preg_replace('/\[[^\]]*\]/', '', $company['COMMENTS'] ?? '')
             ];
-            
         } catch (Exception $e) {
             $this->WriteToTrackingService("Ошибка получения компании ID={$companyId}: " . $e->getMessage());
             return null;
         }
+    }
+
+    /**
+     * Получает реквизиты компании (ИНН, КПП, адрес и т.д.)
+     */
+    private function GetCompanyRequisites($companyId)
+    {
+        try {
+            if (!\Bitrix\Main\Loader::includeModule('crm')) {
+                return [];
+            }
+
+            // Получаем реквизиты компании
+            $requisiteEntity = new \Bitrix\Crm\EntityRequisite();
+
+            $dbRequisites = $requisiteEntity->getList([
+                'filter' => [
+                    'ENTITY_TYPE_ID' => \CCrmOwnerType::Company,
+                    'ENTITY_ID' => $companyId
+                ],
+                'order' => ['SORT' => 'ASC'],
+                'limit' => 1  // Берем первый активный реквизит
+            ]);
+
+            if ($requisite = $dbRequisites->fetch()) {
+                $this->WriteToTrackingService("Реквизиты компании ID={$companyId} найдены");
+
+                return [
+                    'inn' => $requisite['RQ_INN'] ?? '',
+                    'kpp' => $requisite['RQ_KPP'] ?? '',
+                    'ogrn' => $requisite['RQ_OGRN'] ?? '',
+                    'address' => $requisite['RQ_ADDR'] ?? '',
+                    'bank_account' => $requisite['RQ_ACC_NUM'] ?? '',
+                    'bank_name' => $requisite['RQ_BANK_NAME'] ?? '',
+                    'bik' => $requisite['RQ_BIK'] ?? '',
+                    'cor_account' => $requisite['RQ_COR_ACC_NUM'] ?? '',
+                ];
+            }
+
+            $this->WriteToTrackingService("Реквизиты для компании ID={$companyId} не найдены");
+            return [];
+        } catch (Exception $e) {
+            $this->WriteToTrackingService("Ошибка получения реквизитов компании ID={$companyId}: " . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * Маппинг значения поля списка в строковое значение group
+     */
+    private function MapGroupValue($fieldValue)
+    {
+        if (empty($fieldValue)) {
+            $this->WriteToTrackingService("Предупреждение: поле UF_CRM_1756716976955 пустое");
+            return '';
+        }
+
+        // Если передан массив, берем первый элемент
+        if (is_array($fieldValue)) {
+            $fieldValue = reset($fieldValue);
+        }
+
+        $fieldValue = (int)$fieldValue;
+
+        if (isset(self::GROUP_MAPPING[$fieldValue])) {
+            $mappedValue = self::GROUP_MAPPING[$fieldValue];
+            $this->WriteToTrackingService("Маппинг group: {$fieldValue} -> {$mappedValue}");
+            return $mappedValue;
+        }
+
+        $this->WriteToTrackingService("Предупреждение: значение {$fieldValue} не найдено в маппинге GROUP_MAPPING");
+        return '';
     }
 
     /**
@@ -249,70 +348,80 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
     private function PrepareRequestData($contacts, $companyData)
     {
         $contactsFormatted = [];
+
         foreach ($contacts as $contact) {
-            $contactsFormatted[] = [
-                "id" => (int)$contact['id'],
-                "fio" => $contact['fio'] ?? '',
-                "phone" => $contact['phone'] ?? '',
-                "email" => $contact['email'] ?? ''
-            ];
+            $contactData = array_filter([
+                "ext_id" => (int)$contact['id'],
+                "fio" => $contact['fio'] ?? null,
+                "phone" => $contact['phone'] ?? null,
+                "email" => $contact['email'] ?? null
+            ], function ($value) {
+                return $value !== null && $value !== '';
+            });
+
+            $contactsFormatted[] = $contactData;
         }
 
-        return [
-            "name" => $companyData['name'] ?? '',
-            "inn" => $companyData['inn'] ?? '',
-            "kpp" => $companyData['kpp'] ?? '',
-            "email" => $companyData['email'] ?? '',
-            "phone" => $companyData['phone'] ?? '',
-            "address" => $companyData['address'] ?? '',
+        $requestData = array_filter([
+            "ext_id" => (int)$companyData['id'],
+            "name" => $companyData['name'] ?? null,
+            "inn" => $companyData['inn'] ?? null,
+            "kpp" => $companyData['kpp'] ?? null,
+            "email" => $companyData['email'] ?? null,
+            "phone" => $companyData['phone'] ?? null,
+            "address" => $companyData['address'] ?? null,
+            "group" => $companyData['group'] ?? null,
+            "comment" => $companyData['comment'] ?? null,
             "contacts" => $contactsFormatted
-        ];
+        ], function ($value) {
+            return $value !== null && $value !== '';
+        });
+
+        $this->WriteToTrackingService("Данные для отправки: " . json_encode($requestData, JSON_UNESCAPED_UNICODE));
+
+        return $requestData;
     }
 
-   /**
- * Отправка данных пользователя в API
- */
-private function SendUserData($authToken, $data, $companyId)
-{
-    $apiUrl = "https://test-api.targetco.ru/api/btx/users/" . $companyId;
+    /**
+     * Отправка данных в API
+     */
+    private function SendToAPI($authToken, $data, $apiUrl)
+    {
+        try {
+            $http = new \Bitrix\Main\Web\HttpClient([
+                'socketTimeout' => 30,
+                'streamTimeout' => 30,
+                'waitResponse' => true,
+            ]);
 
-    try {
-        $http = new \Bitrix\Main\Web\HttpClient([
-            'socketTimeout' => 30,
-            'streamTimeout' => 30,
-            'waitResponse' => true,
-        ]);
-        
-        $jsonData = json_encode($data, JSON_UNESCAPED_UNICODE);
-        
-        $http->setHeader('Content-Type', 'application/json');
-        $http->setHeader('Accept', 'application/json');
-        $http->setHeader('Authorization', 'Bearer ' . $authToken);
-        
-        $response = $http->post($apiUrl, $jsonData);
-        $httpCode = $http->getStatus();
+            $jsonData = json_encode($data, JSON_UNESCAPED_UNICODE);
 
-        $this->WriteToTrackingService("Ответ API (код {$httpCode}): " . $response);
-        
-        if ($httpCode >= 200 && $httpCode < 300) {
-            // Декодируем JSON ответ
-            $responseData = json_decode($response, true);
-            
-            if (isset($responseData['data']['id'])) {
-                $this->UserId = $responseData['data']['id'];
-                $this->WriteToTrackingService("ID пользователя из API: " . $this->UserId);
+            $http->setHeader('Content-Type', 'application/json');
+            $http->setHeader('Accept', 'application/json');
+            $http->setHeader('Authorization', 'Bearer ' . $authToken);
+
+            $response = $http->post($apiUrl, $jsonData);
+            $httpCode = $http->getStatus();
+
+            $this->WriteToTrackingService("Ответ API (код {$httpCode}): " . $response);
+
+            if ($httpCode >= 200 && $httpCode < 300) {
+                $responseData = json_decode($response, true);
+
+                if (isset($responseData['data']['id'])) {
+                    $this->UserId = $responseData['data']['id'];
+                    $this->WriteToTrackingService("ID из API: " . $this->UserId);
+                }
+
+                return true;
+            } else {
+                return false;
             }
-            
-            return true;
-        } else {
+        } catch (Exception $e) {
+            $this->WriteToTrackingService("Исключение при отправке: " . $e->getMessage());
             return false;
         }
-        
-    } catch (Exception $e) {
-        $this->WriteToTrackingService("Исключение при отправке: " . $e->getMessage());
-        return false;
     }
-}
 
     public static function ValidateProperties($arTestProperties = array(), CBPWorkflowTemplateUser $user = null)
     {
