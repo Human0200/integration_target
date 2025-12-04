@@ -73,10 +73,19 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
                 $this->WriteToTrackingService("Контакты не указаны, отправляем только данные компании");
             }
 
-            // 4. Формирование данных для отправки (сразу с контактами)
+            // 4. Получаем ID компании из Target по email (если существует)
+            $targetCompanyId = $this->GetTargetCompanyIdByEmail($authToken, $companyData['email']);
+            
+            if ($targetCompanyId) {
+                $this->WriteToTrackingService("Найдена существующая компания в Target с ID: " . $targetCompanyId);
+                // Устанавливаем найденный ID для обновления
+                $companyData['ext_id'] = $targetCompanyId;
+            }
+
+            // 5. Формирование данных для отправки (сразу с контактами)
             $requestData = $this->PrepareRequestData($contacts, $companyData);
 
-            // 5. Отправка данных в API (всегда на /0, API сам разберется по ext_id)
+            // 6. Отправка данных в API
             $apiUrl = "https://test-api.targetco.ru/api/btx/users/" . ($companyData['ext_id'] ?? '0');
             $this->WriteToTrackingService("Ссылка API: " . $apiUrl);
             $result = $this->SendToAPI($authToken, $requestData, $apiUrl);
@@ -91,6 +100,60 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
         }
 
         return CBPActivityExecutionStatus::Closed;
+    }
+
+    /**
+     * Получение ID компании из Target по email
+     */
+    private function GetTargetCompanyIdByEmail($authToken, $email)
+    {
+        if (empty($email)) {
+            $this->WriteToTrackingService("Email компании пустой, поиск по email невозможен");
+            return null;
+        }
+
+        try {
+            $apiUrl = "https://test-api.targetco.ru/api/btx/users";
+            
+            $http = new \Bitrix\Main\Web\HttpClient([
+                'socketTimeout' => 30,
+                'streamTimeout' => 30,
+                'waitResponse' => true,
+            ]);
+
+            $http->setHeader('Content-Type', 'application/json');
+            $http->setHeader('Accept', 'application/json');
+            $http->setHeader('Authorization', 'Bearer ' . $authToken);
+
+            $response = $http->get($apiUrl);
+            $httpCode = $http->getStatus();
+
+            $this->WriteToTrackingService("Поиск компании по email {$email}. HTTP код: " . $httpCode);
+
+            if ($httpCode === 200) {
+                $usersData = json_decode($response, true);
+                
+                if (isset($usersData['success']) && $usersData['success'] === true && !empty($usersData['data'])) {
+                    // Ищем компанию по email
+                    foreach ($usersData['data'] as $user) {
+                        if (isset($user['email']) && strtolower(trim($user['email'])) === strtolower(trim($email))) {
+                            $this->WriteToTrackingService("Найдена компания в Target: ID={$user['id']}, Email={$user['email']}");
+                            return $user['id'];
+                        }
+                    }
+                    
+                    $this->WriteToTrackingService("Компания с email {$email} не найдена в Target");
+                } else {
+                    $this->WriteToTrackingService("Не удалось получить список пользователей из Target или список пуст");
+                }
+            } else {
+                $this->WriteToTrackingService("Ошибка при запросе списка пользователей из Target. HTTP код: " . $httpCode);
+            }
+        } catch (Exception $e) {
+            $this->WriteToTrackingService("Исключение при поиске компании по email: " . $e->getMessage());
+        }
+
+        return null;
     }
 
     /**
