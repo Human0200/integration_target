@@ -123,7 +123,7 @@ if ($entityType === 'company' && !empty($targetCompanyId)) {
 
 // Выводим iframe с адаптивной высотой
 ?>
-<div style="width: 100%; height: 800px;">
+<div style="width: 100%; height: 800px; ">
     <iframe
         src="<?= htmlspecialcharsbx($url) ?>"
         width="100%"
