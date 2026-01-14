@@ -73,20 +73,27 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
                 $this->WriteToTrackingService("Контакты не указаны, отправляем только данные компании");
             }
 
-            // 4. Получаем ID компании из Target по email (если существует)
-            $targetCompanyId = $this->GetTargetCompanyIdByEmail($authToken, $companyData['email']);
-            
+            // 4. Получаем ID компании из Target по email или ИНН (если существует)
+            $targetCompanyId = $this->GetTargetCompanyIdByInn($authToken, $companyData['inn']) ?? $this->GetTargetCompanyIdByEmail($authToken, $companyData['email']);
             if ($targetCompanyId) {
                 $this->WriteToTrackingService("Найдена существующая компания в Target с ID: " . $targetCompanyId);
                 // Устанавливаем найденный ID для обновления
                 $companyData['ext_id'] = $targetCompanyId;
             }
+            $targetApiKey = $this->GetUserApiKey($companyData['responsible_id']);
 
-            // 5. Формирование данных для отправки (сразу с контактами)
+            if (empty($targetApiKey)) {
+                $this->WriteToTrackingService("ОШИБКА: Не удалось получить API ключ для пользователя ID=" . $companyData['responsible_id']);
+                return CBPActivityExecutionStatus::Closed;
+            }
+
+            $this->WriteToTrackingService("API ключ получен для пользователя ID=" . $companyData['responsible_id']);
+
+            // Формирование данных для отправки
             $requestData = $this->PrepareRequestData($contacts, $companyData);
 
-            // 6. Отправка данных в API
-            $apiUrl = "https://test-api.targetco.ru/api/btx/users/" . ($companyData['ext_id'] ?? '0');
+            // Отправка данных в API
+            $apiUrl = "https://api.targetco.ru/api/btx/users/" . ($companyData['ext_id'] ?? '0') . '?token=' . $targetApiKey;
             $this->WriteToTrackingService("Ссылка API: " . $apiUrl);
             $result = $this->SendToAPI($authToken, $requestData, $apiUrl);
 
@@ -103,6 +110,118 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
     }
 
     /**
+     * Получение API ключа пользователя
+     */
+    private function GetUserApiKey($userId)
+    {
+        if (empty($userId)) {
+            $this->WriteToTrackingService("ОШИБКА: ID пользователя не указан");
+            return '';
+        }
+
+        try {
+            $userResult = \CUser::GetByID($userId);
+
+            if (!$userResult) {
+                $this->WriteToTrackingService("ОШИБКА: Не удалось получить данные пользователя ID=" . $userId);
+                return '';
+            }
+
+            $userFields = $userResult->Fetch();
+
+            if (!$userFields) {
+                $this->WriteToTrackingService("ОШИБКА: Пользователь ID=" . $userId . " не найден");
+                return '';
+            }
+
+            // Логируем все UF_ поля для отладки
+            // $ufFields = array_filter(array_keys($userFields), function ($key) {
+            //     return strpos($key, 'UF_') === 0;
+            // });
+            // $this->WriteToTrackingService("Доступные UF_ поля пользователя: " . implode(', ', $ufFields));
+
+            if (!isset($userFields['UF_APIKEY'])) {
+                $this->WriteToTrackingService("ОШИБКА: Поле UF_APIKEY не существует у пользователя ID=" . $userId);
+                return '';
+            }
+
+            $apiKey = trim($userFields['UF_APIKEY']);
+
+            if (empty($apiKey)) {
+                $this->WriteToTrackingService("ОШИБКА: Поле UF_APIKEY пустое у пользователя ID=" . $userId);
+                return '';
+            }
+
+            $this->WriteToTrackingService("API ключ успешно получен (длина: " . strlen($apiKey) . " символов)");
+            return $apiKey;
+        } catch (Exception $e) {
+            $this->WriteToTrackingService("ИСКЛЮЧЕНИЕ при получении API ключа: " . $e->getMessage());
+            return '';
+        }
+    }
+
+    /**
+     * Получение ID компании из Target по ИНН
+     */
+    private function GetTargetCompanyIdByInn($authToken, $inn)
+    {
+        if (empty($inn)) {
+            $this->WriteToTrackingService("ИНН компании пустой, поиск по ИНН невозможен");
+            return null;
+        }
+
+        try {
+            $apiUrl = "https://api.targetco.ru/api/btx/users";
+
+            $http = new \Bitrix\Main\Web\HttpClient([
+                'socketTimeout' => 30,
+                'streamTimeout' => 30,
+                'waitResponse' => true,
+            ]);
+
+            $http->setHeader('Content-Type', 'application/json');
+            $http->setHeader('Accept', 'application/json');
+            $http->setHeader('Authorization', 'Bearer ' . $authToken);
+
+            $response = $http->get($apiUrl);
+            $httpCode = $http->getStatus();
+
+            $this->WriteToTrackingService("Поиск компании по ИНН {$inn}. HTTP код: " . $httpCode);
+
+            if ($httpCode !== 200) {
+                $this->WriteToTrackingService("Ошибка при получении списка компаний. HTTP код: " . $httpCode);
+                return null;
+            }
+
+            $data = json_decode($response, true);
+            $data = $data['data'];
+
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                $this->WriteToTrackingService("Ошибка при декодировании JSON. Ошибка: " . json_last_error_msg());
+                return null;
+            }
+            foreach ($data as $company) {
+                if (isset($company['inn']) && $company['inn'] === $inn) {
+                    
+                    $this->writeToTrackingService("Декодирования компания:". json_encode($company, JSON_UNESCAPED_UNICODE));
+                    
+                }
+            }
+            foreach ($data as $company) {
+                if (isset($company['inn']) && $company['inn'] === $inn) {
+
+                    return $company['id'];
+                }
+            }
+        } catch (Exception $e) {
+            $this->WriteToTrackingService("Исключение при поиске компании по ИНН: " . $e->getMessage());
+        }
+
+        $this->WriteToTrackingService("Компания с ИНН {$inn} не найдена в Target");
+        return null;
+    }
+
+    /**
      * Получение ID компании из Target по email
      */
     private function GetTargetCompanyIdByEmail($authToken, $email)
@@ -113,8 +232,8 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
         }
 
         try {
-            $apiUrl = "https://test-api.targetco.ru/api/btx/users";
-            
+            $apiUrl = "https://api.targetco.ru/api/btx/users";
+
             $http = new \Bitrix\Main\Web\HttpClient([
                 'socketTimeout' => 30,
                 'streamTimeout' => 30,
@@ -132,7 +251,7 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
 
             if ($httpCode === 200) {
                 $usersData = json_decode($response, true);
-                
+
                 if (isset($usersData['success']) && $usersData['success'] === true && !empty($usersData['data'])) {
                     // Ищем компанию по email
                     foreach ($usersData['data'] as $user) {
@@ -141,7 +260,7 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
                             return $user['id'];
                         }
                     }
-                    
+
                     $this->WriteToTrackingService("Компания с email {$email} не найдена в Target");
                 } else {
                     $this->WriteToTrackingService("Не удалось получить список пользователей из Target или список пуст");
@@ -161,7 +280,7 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
      */
     private function Authenticate()
     {
-        $authUrl = "https://test-api.targetco.ru/api/login";
+        $authUrl = "https://api.targetco.ru/api/login";
 
         $authData = [
             "email" => self::API_EMAIL,
@@ -293,6 +412,7 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
 
             return [
                 'ext_id' => $company['UF_CRM_1760515262922'] ?? null,
+                'responsible_id' => $company['ASSIGNED_BY_ID'] ?? null,
                 'id' => $company['ID'] ?? null,
                 'name' => $company['TITLE'] ?? '',
                 'inn' => $requisites['inn'] ?? '',
@@ -328,21 +448,94 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
                     'ENTITY_ID' => $companyId
                 ],
                 'order' => ['SORT' => 'ASC'],
-                'limit' => 1  // Берем первый активный реквизит
+                'limit' => 1
             ]);
 
             if ($requisite = $dbRequisites->fetch()) {
-                $this->WriteToTrackingService("Реквизиты компании ID={$companyId} найдены");
+                $requisiteId = $requisite['ID'];
+                $address = '';
+
+                // Получаем адреса как в примере
+                $addressEntity = new \Bitrix\Crm\EntityAddress();
+                $dbAddress = $addressEntity->getList([
+                    'filter' => [
+                        'ENTITY_ID' => $requisiteId,
+                        'ANCHOR_ID' => $companyId
+                    ]
+                ]);
+
+                while ($addr = $dbAddress->fetch()) {
+                    // TYPE_ID = 6 - юридический адрес (Registered)
+                    // TYPE_ID = 1 - фактический адрес (Primary)
+                    // TYPE_ID = 3 - почтовый адрес (Home)
+
+                    if ($addr['TYPE_ID'] == 6) { // Юридический адрес
+                        $addressParts = [];
+
+                        if (!empty($addr['POSTAL_CODE'])) {
+                            $addressParts[] = $addr['POSTAL_CODE'];
+                        }
+
+                        // Собираем адрес из компонентов
+                        $locationParts = array_filter([
+                            $addr['REGION'],
+                            $addr['PROVINCE'],
+                            $addr['CITY'],
+                            $addr['ADDRESS_1'],
+                            $addr['ADDRESS_2']
+                        ]);
+
+                        if (!empty($locationParts)) {
+                            $addressParts[] = implode(', ', $locationParts);
+                        }
+
+                        $address = implode(', ', $addressParts);
+                        break; // Берем юридический адрес
+                    }
+                }
+
+                // Если юридический адрес не найден, берем первый попавшийся
+                if (empty($address)) {
+                    $dbAddress->reset();
+                    while ($addr = $dbAddress->fetch()) {
+                        $addressParts = [];
+
+                        if (!empty($addr['POSTAL_CODE'])) {
+                            $addressParts[] = $addr['POSTAL_CODE'];
+                        }
+
+                        $locationParts = array_filter([
+                            $addr['REGION'],
+                            $addr['PROVINCE'],
+                            $addr['CITY'],
+                            $addr['ADDRESS_1'],
+                            $addr['ADDRESS_2']
+                        ]);
+
+                        if (!empty($locationParts)) {
+                            $addressParts[] = implode(', ', $locationParts);
+                        }
+
+                        $address = implode(', ', $addressParts);
+                        break;
+                    }
+                }
+
+                $this->WriteToTrackingService("Реквизиты компании ID={$companyId} найдены:");
 
                 return [
                     'inn' => $requisite['RQ_INN'] ?? '',
                     'kpp' => $requisite['RQ_KPP'] ?? '',
                     'ogrn' => $requisite['RQ_OGRN'] ?? '',
-                    'address' => $requisite['RQ_ADDR'] ?? '',
+                    'address' => $address,
                     'bank_account' => $requisite['RQ_ACC_NUM'] ?? '',
                     'bank_name' => $requisite['RQ_BANK_NAME'] ?? '',
                     'bik' => $requisite['RQ_BIK'] ?? '',
                     'cor_account' => $requisite['RQ_COR_ACC_NUM'] ?? '',
+                    'company_name' => $requisite['RQ_COMPANY_NAME'] ?? '',
+                    'company_full_name' => $requisite['RQ_COMPANY_FULL'] ?? '',
+                    'okpo' => $requisite['RQ_OKPO'] ?? '',
+                    'okved' => $requisite['RQ_OKVED'] ?? '',
                 ];
             }
 
@@ -435,7 +628,7 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
             "address" => $companyData['address'] ?? null,
             "group" => $companyData['group'] ?? null,
             "comment" => $companyData['comment'] ?? null,
-            "contacts" => $contactsFormatted
+            "contacts" => $contactsFormatted,
         ], function ($value) {
             return $value !== null && $value !== '';
         });

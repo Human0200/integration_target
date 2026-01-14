@@ -96,7 +96,7 @@ if ($entityType === 'company' && $entityId > 0) {
 }
 
 // Формируем URL для iframe
-$url = 'https://test.targetco.ru';
+$url = 'https://targetco.ru';
 
 // Формируем параметры URL (без логина и пароля)
 $params = [];
@@ -116,7 +116,7 @@ if (!empty($targetCompanyId)) {
 
 // Специальная обработка для компаний с Target ID
 if ($entityType === 'company' && !empty($targetCompanyId)) {
-    $url = 'https://test.targetco.ru/offers?' . http_build_query($params) . '#user_id=' . $targetCompanyId;
+    $url = 'https://targetco.ru/offers?' . http_build_query($params) . '#user_id=' . $targetCompanyId;
 } else {
     $url .= '?' . http_build_query($params);
 }
