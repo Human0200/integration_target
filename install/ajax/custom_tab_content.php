@@ -12,6 +12,9 @@ if ($siteID !== '') {
 }
 
 require_once($_SERVER['DOCUMENT_ROOT'] . '/bitrix/modules/main/include/prolog_before.php');
+header('Cache-Control: no-cache, no-store, must-revalidate');
+header('Pragma: no-cache');
+header('Expires: 0');
 
 if (!defined("B_PROLOG_INCLUDED") || B_PROLOG_INCLUDED !== true) {
     die();
@@ -98,7 +101,7 @@ if ($entityType === 'company' && $entityId > 0) {
 // Формируем URL для iframe
 $url = 'https://targetco.ru';
 
-// Формируем параметры URL (без логина и пароля)
+// Формируем параметры URL
 $params = [];
 $params['entityType'] = $entityType;
 $params['entityId'] = $entityId;
@@ -114,6 +117,10 @@ if (!empty($targetCompanyId)) {
     $params['targetCompanyId'] = $targetCompanyId;
 }
 
+// КРИТИЧЕСКИ ВАЖНО: добавляем уникальный параметр для предотвращения кэширования
+$params['_t'] = time();
+$params['_uid'] = $userId; // ID пользователя как дополнительный параметр
+
 // Специальная обработка для компаний с Target ID
 if ($entityType === 'company' && !empty($targetCompanyId)) {
     $url = 'https://targetco.ru/offers?' . http_build_query($params) . '#user_id=' . $targetCompanyId;
@@ -121,10 +128,14 @@ if ($entityType === 'company' && !empty($targetCompanyId)) {
     $url .= '?' . http_build_query($params);
 }
 
+// Генерируем уникальный ID для iframe на основе времени и пользователя
+$iframeId = 'target_iframe_' . $userId . '_' . time();
+
 // Выводим iframe с адаптивной высотой
 ?>
 <div style="width: 100%; height: 800px; ">
     <iframe
+        id="<?= $iframeId ?>"
         src="<?= htmlspecialcharsbx($url) ?>"
         width="100%"
         height="100%"
@@ -137,4 +148,9 @@ if ($entityType === 'company' && !empty($targetCompanyId)) {
 <script>
 console.log('URL: ' + '<?= htmlspecialcharsbx($url) ?>');
 console.log('Target Company ID: ' + '<?= $targetCompanyId ?>');
+console.log('User ID: ' + '<?= $userId ?>');
+console.log('Iframe ID: ' + '<?= $iframeId ?>');
+
+// Дополнительная защита от кэширования
+document.getElementById('<?= $iframeId ?>').contentWindow.location.reload(true);
 </script>
