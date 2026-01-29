@@ -30,6 +30,35 @@ function writeHandlerLog($message)
     file_put_contents($logFile, "[{$timestamp}] {$message}\n", FILE_APPEND);
 }
 
+    /**
+     * Получение ID пользователя по ключу
+     */
+    function GetUserIdByApiKey($apiKey)
+    {
+        if (empty($apiKey)) {
+            return null;
+        }
+
+        try {
+            $userResult = \CUser::GetList(($by = "id"), ($order = "asc"), ["UF_APIKEY" => $apiKey]);
+
+            if (!$userResult) {
+                return null;
+            }
+
+            $userFields = $userResult->Fetch();
+
+            if (!$userFields) {
+                return null;
+            }
+
+            return $userFields['ID'];
+        } catch (Exception $e) {
+            writeHandlerLog('Error in GetUserIdByApiKey: ' . $e->getMessage());
+            return null;
+        }
+    }
+
 // Загружаем необходимые модули
 if (!Loader::includeModule('crm')) {
     die(json_encode([
@@ -123,6 +152,7 @@ $apiFunctions = [
         try {
             $contactId = $params['contactId'] ?? null;
             $data = $params['data'] ?? [];
+            $data['ASSIGNED_BY_ID'] = GetUserIdByApiKey($params['token'] ?? '');
 
             if (!$contactId) {
                 return [
@@ -224,6 +254,7 @@ $apiFunctions = [
 
             $companyId = $params['companyId'] ?? null;
             $data = $params['data'] ?? [];
+            $data['ASSIGNED_BY_ID'] = GetUserIdByApiKey($params['token'] ?? '');
 
             if (!$companyId) {
                 $error = 'Не указан ID компании (companyId отсутствует в запросе)';

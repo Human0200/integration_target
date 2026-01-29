@@ -12,12 +12,11 @@ function SupportMenu(&$arGlobalMenu, &$arModuleMenu)
         return;
     }
 
-    // Создаем корневой раздел "Интеграция" без подпунктов
     $arGlobalMenu['support_connection'] = [
         'menu_id' => 'global_menu_support',
         'text' => Loc::getMessage('LEADSPACE_CONNECTION_TITLE'),
         'title' => Loc::getMessage('LEADSPACE_CONNECTION_DESC'),
-        'sort' => 1000, // Позиция в меню
+        'sort' => 1000, 
         'items_id' => 'global_menu_support_items',
         'icon' => 'update_menu_icon',
     ];

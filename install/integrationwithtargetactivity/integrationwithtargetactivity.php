@@ -160,6 +160,7 @@ class CBPIntegrationWithTargetActivity extends CBPActivity
         }
     }
 
+
     /**
      * Получение ID компании из Target по ИНН
      */
