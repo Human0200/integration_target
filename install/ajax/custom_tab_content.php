@@ -114,6 +114,9 @@ if (!empty($targetCompanyId)) {
     $params['targetCompanyId'] = $targetCompanyId;
 }
 
+// Добавляем случайное значение для защиты от кэширования
+$params['_t'] = time() . rand(1000, 9999);
+
 // Специальная обработка для компаний с Target ID
 if ($entityType === 'company' && !empty($targetCompanyId)) {
     $url = 'https://targetco.ru/offers?' . http_build_query($params) . '#user_id=' . $targetCompanyId;
