@@ -120,6 +120,7 @@ writeHandlerLog('Parsed params: ' . print_r($params, true));
 
 $apiFunctions = [
     'findOrCreateContact' => function ($params) {
+        $params['properties']['ASSIGNED_BY_ID'] = GetUserIdByApiKey($params['token'] ?? '');
         try {
             writeHandlerLog('Calling FindContact::findOrCreateContact with: ' . print_r($params, true));
 
@@ -223,6 +224,7 @@ $apiFunctions = [
 
     'findOrCreateCompany' => function ($params) {
         try {
+            $params['properties']['ASSIGNED_BY_ID'] = GetUserIdByApiKey($params['token'] ?? '');
             $companyId = CompanyManager::findOrCreateCompany($params['properties'] ?? $params);
 
             if ($companyId) {

@@ -69,8 +69,8 @@ class CompanyManager
             $companyFields = [
                 'TITLE' => $title,
                 'COMPANY_TYPE' => 'CUSTOMER',
-                'ASSIGNED_BY_ID' => 1,
-                'CREATED_BY_ID' => 1,
+                'ASSIGNED_BY_ID' => $properties['ASSIGNED_BY_ID'] ?? 1,
+                'CREATED_BY_ID' => $properties['ASSIGNED_BY_ID'] ?? 1,
             ];
 
             // Добавляем все остальные поля из properties (кроме мультиполей)
